@@ -1,0 +1,14 @@
+[package]
+name = "mpris-controller"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+futures = "0.3.31"
+futures-core = "0.3.31"
+futures-util = "0.3.31"
+tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros"] }
+tracing = "0.1.43"
+tracing-appender = "0.2.4"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+zbus = "5.12.0"
