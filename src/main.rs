@@ -1,10 +1,18 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    ops::DerefMut,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
-use tracing::info;
+use futures::{FutureExt, Stream, StreamExt, future};
+use futures_util::TryStreamExt;
+use tracing::{info, instrument};
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 use zbus::{
-    Connection,
-    zvariant::{ObjectPath, Value},
+    Connection, Proxy,
+    proxy::SignalStream,
+    zvariant::{Array, Dict, OwnedValue, Str, Value},
 };
 
 const MPRIS_PLAYER: &str = "org.mpris.MediaPlayer2";
@@ -56,11 +64,12 @@ impl<'a> TryFrom<&Value<'a>> for LoopStatus {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct Metadata {
     art_url: String,
     length: u64,
     trackid: String,
-    album: String,
+    album: Option<String>,
     artist: Vec<String>,
     title: String,
     url: String,
@@ -96,6 +105,7 @@ impl<'a> TryFrom<&Value<'a>> for Metadata {
 }
 
 impl<'a> From<HashMap<String, Value<'a>>> for Metadata {
+    #[instrument]
     fn from(value: HashMap<String, Value<'a>>) -> Self {
         let art_url: String = value.get("mpris:artUrl").unwrap().try_into().unwrap();
         let length: u64 = match value.get("mpris:length") {
@@ -119,7 +129,14 @@ impl<'a> From<HashMap<String, Value<'a>>> for Metadata {
             }
         };
 
-        let album: String = value.get("xesam:album").unwrap().try_into().unwrap();
+        let album: Option<String> = match value.get("xesam:album") {
+            Some(f) => match f {
+                Value::Str(s) => Some(s.to_string()),
+                _ => unimplemented!(),
+            },
+
+            None => None,
+        };
         let artist: Vec<String> = value
             .get("xesam:artist")
             .unwrap()
@@ -182,6 +199,7 @@ impl<'a> From<HashMap<String, Value<'a>>> for Metadata {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct PlayerCapabilities {
     can_control: bool,
     can_next: bool,
@@ -245,6 +263,8 @@ impl<'a> From<HashMap<&str, Value<'a>>> for PlayerCapabilities {
     }
 }
 
+async fn try_poll_signal<'a>(stream: &mut SignalStream<'a>) {}
+
 #[tokio::main]
 async fn main() {
     let file = std::fs::OpenOptions::new()
@@ -274,13 +294,13 @@ async fn main() {
         .unwrap();
 
     let body = msg.body();
-    let data: Vec<&str> = body
+    let data: Vec<String> = body
         .deserialize::<Vec<&str>>()
         .unwrap()
         .iter()
         .filter_map(|f| {
             if f.starts_with(MPRIS_PLAYER) {
-                Some(*f)
+                Some(f.to_string())
             } else {
                 None
             }
@@ -288,39 +308,71 @@ async fn main() {
         .collect();
 
     println!("{data:?}");
+    let mut proxies: Vec<(String, SignalStream)> = vec![];
 
     for player in data.iter() {
-        let properties = conn
-            .call_method(
-                Some(*player),
-                "/org/mpris/MediaPlayer2",
-                Some("org.freedesktop.DBus.Properties"),
-                "GetAll",
-                &("org.mpris.MediaPlayer2.Player"),
-            )
-            .await
-            .unwrap();
+        // let properties = conn
+        //     .call_method(
+        //         Some(player.clone()),
+        //         "/org/mpris/MediaPlayer2",
+        //         Some("org.freedesktop.DBus.Properties"),
+        //         "GetAll",
+        //         &("org.mpris.MediaPlayer2.Player"),
+        //     )
+        //     .await
+        //     .unwrap();
 
-        let body = properties.body();
-        let map = body.deserialize::<HashMap<&str, Value>>().unwrap();
-        info!(?map);
-        let capabilities: PlayerCapabilities = map.into();
-        // info!(?capabilities);
+        let proxy = Proxy::new(
+            &conn,
+            player.clone(),
+            "/org/mpris/MediaPlayer2",
+            "org.freedesktop.DBus.Properties",
+        )
+        .await
+        .unwrap();
 
-        // let mut msg: Vec<_> = map
-        //     .iter()
-        //     .filter_map(|f| {
-        //         if *f.0 == "Metadata" { Some(f.1) } else { None }
-        //         // if f.1.signature() != Signature::dict(Signature::Str, Signature::Variant) {
-        //         //     let (name, val) = (*f.0, f.1.clone());
-        //         //     Some(name)
-        //         // } else {
-        //         //     None
-        //         // }
-        //     })
-        //     .collect();
-        //
-        // msg.sort();
-        // println!("{capabilities:#?}");
+        let stream = proxy.receive_signal("PropertiesChanged").await.unwrap();
+
+        proxies.push((player.clone(), stream));
+    }
+
+    let waker = futures::task::noop_waker();
+    let mut cx = Context::from_waker(&waker);
+    loop {
+        for (name, stream) in proxies.iter_mut() {
+            match Pin::new(stream).poll_next_unpin(&mut cx) {
+                Poll::Ready(Some(msg)) => {
+                    let (iface, changed, invalidated): (
+                        String,
+                        HashMap<String, OwnedValue>,
+                        Vec<String>,
+                    ) = msg.body().deserialize().unwrap();
+                    if let Some(status) = changed.get("PlaybackStatus") {
+                        let val = &**status;
+                        let status: PlaybackStatus = val.try_into().unwrap();
+                    }
+                    if let Some(status) = changed.get("Metadata") {
+                        let val = &**status;
+                        if let Value::Dict(dict) = val {
+                            let map: HashMap<String, Value> =
+                                dict.try_clone().unwrap().try_into().unwrap();
+                            let metadata: Metadata = map.try_into().unwrap();
+                            println!("{metadata:?}");
+                        }
+                    }
+                    if let Some(status) = changed.get("CanGoPrevious") {
+                        let val: bool = status.try_into().unwrap();
+                    }
+
+                    println!("name {name:?} {iface} {changed:?} {invalidated:?}");
+                }
+                Poll::Ready(None) => {
+                    // stream ended
+                }
+                Poll::Pending => {
+                    // no message available (non-blocking)
+                }
+            }
+        }
     }
 }
