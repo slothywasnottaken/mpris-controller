@@ -1,5 +1,10 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
+use futures::StreamExt;
 use tracing::{info, instrument};
 use zbus::{
     Connection, Proxy,
@@ -100,7 +105,7 @@ impl<'a> TryFrom<&Value<'a>> for LoopStatus {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[allow(dead_code)]
 pub struct Metadata {
     art_url: Option<String>,
@@ -243,7 +248,7 @@ impl<'a> From<HashMap<String, Value<'a>>> for Metadata {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[allow(dead_code)]
 pub struct PlayerCapabilities {
     pub can_control: bool,
@@ -308,19 +313,41 @@ impl<'a> From<HashMap<&str, Value<'a>>> for PlayerCapabilities {
     }
 }
 
-#[derive(Debug)]
-pub struct Player<'a> {
-    pub capabilities: PlayerCapabilities,
-    pub stream: SignalStream<'a>,
+#[derive(Default)]
+pub struct PlayerBuilder<'a> {
+    capabilities: PlayerCapabilities,
+    stream: Option<SignalStream<'a>>,
 }
 
-impl<'a> Player<'a> {
-    #[instrument]
-    pub async fn new(conn: &Connection, name: String) -> Self {
-        println!("name {name:?}");
+impl<'a> PlayerBuilder<'a> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub async fn stream(mut self, conn: &Connection, name: &str) -> Self {
+        let proxy = Proxy::new(
+            conn,
+            BusName::WellKnown(WellKnownName::from_str_unchecked(name)),
+            MPRIS_PATH,
+            DBUS_PROPERTIES,
+        )
+        .await
+        .unwrap();
+
+        let stream = proxy
+            .receive_signal(DbusSignals::PropertiesChanged)
+            .await
+            .unwrap();
+
+        self.stream = Some(stream);
+
+        self
+    }
+
+    pub async fn capabilities(mut self, conn: &Connection, name: &str) -> Self {
         let properties = conn
             .call_method(
-                Some(name.clone()),
+                Some(name),
                 MPRIS_PATH,
                 Some(DBUS_PROPERTIES),
                 DbusMethods::GetAll,
@@ -333,10 +360,47 @@ impl<'a> Player<'a> {
         let properties: PlayerCapabilities =
             body.deserialize::<HashMap<&str, Value>>().unwrap().into();
 
-        let cloned = name.clone();
+        self.capabilities = properties;
+
+        self
+    }
+
+    pub fn build(self) -> Player<'a> {
+        Player {
+            stream: self.stream.unwrap(),
+            capabilities: self.capabilities,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Player<'a> {
+    pub capabilities: PlayerCapabilities,
+    pub stream: SignalStream<'a>,
+}
+
+impl<'a> Player<'a> {
+    #[instrument]
+    pub async fn new(conn: &Connection, name: &'a str) -> Self {
+        println!("name {name:?}");
+        let properties = conn
+            .call_method(
+                Some(name),
+                MPRIS_PATH,
+                Some(DBUS_PROPERTIES),
+                DbusMethods::GetAll,
+                &(MPRIS_PLAYER_PREFIX),
+            )
+            .await
+            .unwrap();
+
+        let body = properties.body();
+        let properties: PlayerCapabilities =
+            body.deserialize::<HashMap<&str, Value>>().unwrap().into();
+
         let proxy = Proxy::new(
             conn,
-            BusName::WellKnown(WellKnownName::from_str_unchecked(&cloned)),
+            BusName::WellKnown(WellKnownName::from_str_unchecked(name)),
             MPRIS_PATH,
             DBUS_PROPERTIES,
         )
@@ -364,5 +428,206 @@ impl<'a> Player<'a> {
 
     pub fn capabilities_mut(&mut self) -> &mut PlayerCapabilities {
         &mut self.capabilities
+    }
+}
+
+#[derive(Debug)]
+pub struct PlayerFinder<'a> {
+    players: HashMap<String, Option<Player<'a>>>,
+    owner_changed_signal: SignalStream<'a>,
+}
+
+impl<'a> PlayerFinder<'a> {
+    pub async fn new(conn: &Connection) -> Self {
+        let name_changed = Proxy::new(conn, DBUS_NAME, DBUS_PATH, DBUS_NAME)
+            .await
+            .unwrap();
+
+        let stream = name_changed
+            .receive_signal(DbusSignals::NameOwnerChanged)
+            .await
+            .unwrap();
+
+        Self {
+            players: HashMap::default(),
+            owner_changed_signal: stream,
+        }
+    }
+
+    pub async fn get(
+        &mut self,
+        name: &str,
+        conn: &Connection,
+    ) -> anyhow::Result<Option<&Player<'a>>> {
+        if self.players.contains_key(name) {
+            let msg = conn
+                .call_method(
+                    Some(DBUS_NAME),
+                    DBUS_PATH,
+                    Some(DBUS_NAME),
+                    DbusMethods::ListNames,
+                    &(),
+                )
+                .await?;
+
+            let body = msg.body();
+            let iter = body.deserialize::<Vec<&str>>()?.into_iter();
+            for item in iter {
+                if item != name {
+                    continue;
+                }
+                let player = PlayerBuilder::default()
+                    .stream(conn, item)
+                    .await
+                    .capabilities(conn, item)
+                    .await
+                    .build();
+
+                self.players.insert(item.to_string(), Some(player));
+
+                let p = self.players.get(item).unwrap();
+
+                return Ok(p.as_ref());
+            }
+        }
+
+        let p = self.players.get(name).unwrap();
+        Ok(p.as_ref())
+    }
+
+    pub async fn get_all(&mut self, conn: &Connection) -> anyhow::Result<()> {
+        let msg = conn
+            .call_method(
+                Some(DBUS_NAME),
+                DBUS_PATH,
+                Some(DBUS_NAME),
+                DbusMethods::ListNames,
+                &(),
+            )
+            .await?;
+
+        let body = msg.body();
+        let iter = body.deserialize::<Vec<&str>>()?.into_iter();
+        for item in iter {
+            if item.starts_with(MPRIS_PLAYER_PREFIX) {
+                let player = PlayerBuilder::default()
+                    .stream(conn, item)
+                    .await
+                    .capabilities(conn, item)
+                    .await
+                    .build();
+
+                self.players.insert(item.to_string(), Some(player));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// handles signal changed signal
+    pub async fn handle_owner_changed(
+        &mut self,
+        cx: &mut Context<'a>,
+        conn: &Connection,
+    ) -> anyhow::Result<Poll<bool>> {
+        if let Poll::Ready(Some(msg)) = self.owner_changed_signal.poll_next_unpin(cx) {
+            let (name, old_owner, new_owner): (String, String, String) =
+                msg.body().deserialize()?;
+
+            if name.starts_with(MPRIS_PREFIX) {
+                match (old_owner.is_empty(), new_owner.is_empty()) {
+                    (true, false) => {
+                        let p = PlayerBuilder::default()
+                            .stream(conn, &name)
+                            .await
+                            .capabilities(conn, &name)
+                            .await
+                            .build();
+                        println!("added {name:?}");
+                        self.players.insert(name, Some(p));
+                    }
+                    // removed player
+                    (false, true) => {
+                        match self.players.remove(&name) {
+                            Some(_) => println!("removed player {name:?}"),
+                            None => println!("key {name:?} does not exist in list of players"),
+                        };
+                    }
+
+                    _ => {}
+                }
+            }
+            return Ok(Poll::Ready(true));
+        }
+        Ok(Poll::Ready(false))
+    }
+
+    pub async fn handle_player_changed(&mut self, player: &mut Player<'a>, cx: &mut Context<'a>) {
+        if let Poll::Ready(Some(msg)) = Pin::new(&mut player.stream).poll_next_unpin(cx) {
+            let body = msg.body();
+            // returns interface (str), changed (vec), invalidated (vec), invalidated seems to always
+            // be empty
+            let s: zbus::zvariant::Structure = body.deserialize().unwrap();
+
+            let iface: zbus::zvariant::Str = s.fields()[0].clone().try_into().unwrap();
+            let changed: HashMap<String, zbus::zvariant::OwnedValue> =
+                s.fields()[1].clone().try_into().unwrap();
+
+            println!("iface {iface} changed {changed:?}]");
+
+            if let Some(status) = changed.get("PlaybackStatus") {
+                let val = &**status;
+                player.capabilities_mut().playback_status = val.try_into().unwrap();
+            }
+            if let Some(status) = changed.get("Metadata") {
+                let val = &**status;
+                if let Value::Dict(dict) = val {
+                    let map: HashMap<String, Value> = dict.try_clone().unwrap().try_into().unwrap();
+                    let metadata: Metadata = map.into();
+                    println!("{metadata:?}");
+                }
+            }
+            if let Some(status) = changed.get("CanGoPrevious") {
+                player.capabilities_mut().can_previous = status.try_into().unwrap();
+            }
+        }
+    }
+
+    pub async fn handle_players_changed(&mut self, cx: &mut Context<'a>) {
+        for (name, player) in self.players.iter_mut() {
+            if player.is_none() {
+                continue;
+            }
+            let player = player.as_mut().unwrap();
+            if let Poll::Ready(Some(msg)) = Pin::new(&mut player.stream).poll_next_unpin(cx) {
+                let body = msg.body();
+                // returns interface (str), changed (vec), invalidated (vec), invalidated seems to always
+                // be empty
+                let s: zbus::zvariant::Structure = body.deserialize().unwrap();
+
+                let iface: zbus::zvariant::Str = s.fields()[0].clone().try_into().unwrap();
+                let changed: HashMap<String, zbus::zvariant::OwnedValue> =
+                    s.fields()[1].clone().try_into().unwrap();
+
+                println!("name {name} iface {iface} changed {changed:?}]");
+
+                if let Some(status) = changed.get("PlaybackStatus") {
+                    let val = &**status;
+                    player.capabilities_mut().playback_status = val.try_into().unwrap();
+                }
+                if let Some(status) = changed.get("Metadata") {
+                    let val = &**status;
+                    if let Value::Dict(dict) = val {
+                        let map: HashMap<String, Value> =
+                            dict.try_clone().unwrap().try_into().unwrap();
+                        let metadata: Metadata = map.into();
+                        println!("{metadata:?}");
+                    }
+                }
+                if let Some(status) = changed.get("CanGoPrevious") {
+                    player.capabilities_mut().can_previous = status.try_into().unwrap();
+                }
+            }
+        }
     }
 }
