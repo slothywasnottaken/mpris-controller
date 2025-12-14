@@ -25,6 +25,7 @@ pub const DBUS_PROPERTIES: &str = "org.freedesktop.DBus.Properties";
 pub enum DbusMethods {
     ListNames,
     GetAll,
+    NameHasOwner,
 }
 
 impl TryFrom<DbusMethods> for MemberName<'_> {
@@ -34,6 +35,7 @@ impl TryFrom<DbusMethods> for MemberName<'_> {
         let s = match value {
             DbusMethods::ListNames => "ListNames",
             DbusMethods::GetAll => "GetAll",
+            DbusMethods::NameHasOwner => "NameHasOwner",
         };
 
         Ok(MemberName::from_str_unchecked(s))
@@ -459,37 +461,35 @@ impl<'a> PlayerFinder<'a> {
         name: &str,
         conn: &Connection,
     ) -> anyhow::Result<Option<&Player<'a>>> {
-        if self.players.contains_key(name) {
+        if !self.players.contains_key(name) {
             let msg = conn
                 .call_method(
                     Some(DBUS_NAME),
                     DBUS_PATH,
                     Some(DBUS_NAME),
-                    DbusMethods::ListNames,
+                    DbusMethods::NameHasOwner,
                     &(),
                 )
                 .await?;
 
             let body = msg.body();
-            let iter = body.deserialize::<Vec<&str>>()?.into_iter();
-            for item in iter {
-                if !item.starts_with(MPRIS_PLAYER_PREFIX) {
-                    continue;
-                }
-                let player = PlayerBuilder::default()
-                    .stream(conn, item)
-                    .await
-                    .capabilities(conn, item)
-                    .await
-                    .build();
+            let has_owner = body.deserialize::<bool>()?;
 
-                self.players.insert(item.to_string(), Some(player));
-                if item == name {
-                    let p = self.players.get(item).unwrap();
-
-                    return Ok(p.as_ref());
-                }
+            if !has_owner {
+                return Ok(None);
             }
+
+            let player = PlayerBuilder::default()
+                .stream(conn, name)
+                .await
+                .capabilities(conn, name)
+                .await
+                .build();
+
+            self.players.insert(name.to_string(), Some(player));
+            let p = self.players.get(name).unwrap();
+
+            return Ok(p.as_ref());
         }
 
         let p = self.players.get(name).unwrap();
