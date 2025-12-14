@@ -473,7 +473,7 @@ impl<'a> PlayerFinder<'a> {
             let body = msg.body();
             let iter = body.deserialize::<Vec<&str>>()?.into_iter();
             for item in iter {
-                if item != name {
+                if !item.starts_with(MPRIS_PLAYER_PREFIX) {
                     continue;
                 }
                 let player = PlayerBuilder::default()
@@ -484,10 +484,11 @@ impl<'a> PlayerFinder<'a> {
                     .build();
 
                 self.players.insert(item.to_string(), Some(player));
+                if item == name {
+                    let p = self.players.get(item).unwrap();
 
-                let p = self.players.get(item).unwrap();
-
-                return Ok(p.as_ref());
+                    return Ok(p.as_ref());
+                }
             }
         }
 

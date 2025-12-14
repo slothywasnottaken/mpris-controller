@@ -25,7 +25,7 @@ async fn main() {
     let mut cx = Context::from_waker(&waker);
 
     let mut finder = PlayerFinder::new(&conn).await;
-    finder.add_all(&conn).await.unwrap();
+    finder.get_all(&conn).await.unwrap();
 
     println!("{finder:?}");
 
