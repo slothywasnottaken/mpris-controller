@@ -27,7 +27,12 @@ async fn main() {
     let mut finder = PlayerFinder::new(&conn).await;
     finder.get_all(&conn).await.unwrap();
 
-    println!("{finder:?}");
+    let p = finder
+        .get("org.mpris.MediaPlayer2.YoutubeMusic", &conn)
+        .await
+        .unwrap();
+
+    println!("{p:?}");
 
     loop {
         finder.handle_players_changed(&mut cx).await;

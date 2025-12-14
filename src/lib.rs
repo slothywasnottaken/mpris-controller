@@ -435,7 +435,7 @@ impl<'a> Player<'a> {
 
 #[derive(Debug)]
 pub struct PlayerFinder<'a> {
-    players: HashMap<String, Option<Player<'a>>>,
+    pub players: HashMap<String, Option<Player<'a>>>,
     owner_changed_signal: SignalStream<'a>,
 }
 
@@ -468,7 +468,7 @@ impl<'a> PlayerFinder<'a> {
                     DBUS_PATH,
                     Some(DBUS_NAME),
                     DbusMethods::NameHasOwner,
-                    &(),
+                    &(name),
                 )
                 .await?;
 
