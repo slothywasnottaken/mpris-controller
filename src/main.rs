@@ -1,6 +1,7 @@
 use std::task::Context;
 
-use mpris_controller::PlayerFinder;
+use mpris_controller::MprisClient;
+use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 
 #[tokio::main]
@@ -22,20 +23,16 @@ async fn main() {
     let conn = zbus::Connection::session().await.unwrap();
 
     let waker = futures::task::noop_waker();
-    let mut cx = Context::from_waker(&waker);
+    let mut ctx = Context::from_waker(&waker);
 
-    let mut finder = PlayerFinder::new(&conn).await;
-    finder.get_all(&conn).await.unwrap();
+    let mut client = MprisClient::new(&conn).await.unwrap();
+    client.get_all(&conn).await.unwrap();
 
-    let p = finder
-        .get("org.mpris.MediaPlayer2.YoutubeMusic", &conn)
-        .await
-        .unwrap();
-
-    println!("{p:?}");
+    info!(?client);
 
     loop {
-        finder.handle_players_changed(&mut cx).await;
-        _ = finder.handle_owner_changed(&mut cx, &conn).await.unwrap();
+        if let Some(ev) = client.event(&mut ctx, &conn).await {
+            println!("event: {ev:?}");
+        }
     }
 }
