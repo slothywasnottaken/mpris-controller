@@ -1,5 +1,8 @@
 use std::{
-    collections::HashMap,
+    collections::{
+        HashMap,
+        hash_map::{self},
+    },
     fmt::Debug,
     pin::Pin,
     task::{Context, Poll},
@@ -116,11 +119,11 @@ impl<'a> TryFrom<&Value<'a>> for LoopStatus {
 pub struct Metadata {
     art_url: Option<String>,
     length: Option<u64>,
-    trackid: String,
+    trackid: Option<String>,
     album: Option<String>,
-    artists: Vec<String>,
-    title: String,
-    url: String,
+    artists: Option<Vec<String>>,
+    title: Option<String>,
+    url: Option<String>,
     track_number: Option<i32>,
     disc_number: Option<i32>,
     auto_rating: Option<f64>,
@@ -144,15 +147,15 @@ impl<'a> TryFrom<&Value<'a>> for Metadata {
         // optional because players like browsers can not include the length when we request its
         // metadata but might give us the length later
         let length = match value.get("mpris:length") {
-            Some(Value::I64(s)) => Some(*s as u64),
+            Some(Value::I64(s)) => Some(s.cast_unsigned()),
             Some(Value::U64(s)) => Some(*s),
             None => None,
             _ => bail!("can not find mpris:length"),
         };
-        let trackid: String = match value.get("mpris:trackid") {
-            Some(Value::ObjectPath(s)) => s.to_string(),
-            Some(Value::Str(s)) => s.to_string(),
-            _ => bail!("can not find mpris:trackid"),
+        let trackid: Option<String> = match value.get("mpris:trackid") {
+            Some(Value::ObjectPath(s)) => Some(s.to_string()),
+            Some(Value::Str(s)) => Some(s.to_string()),
+            _ => None,
         };
 
         let album: Option<String> = match value.get("xesam:album") {
@@ -161,19 +164,21 @@ impl<'a> TryFrom<&Value<'a>> for Metadata {
 
             _ => bail!("can not find xesam:album"),
         };
-        let artists: Vec<String> = value
-            .get("xesam:artist")
-            .ok_or(anyhow!("failed to find artists"))?
-            .try_clone()?
-            .try_into()?;
-        let title: String = value
-            .get("xesam:title")
-            .ok_or(anyhow!("can not find xesam:title"))?
-            .try_into()?;
-        let url: String = value
-            .get("xesam:url")
-            .ok_or(anyhow!("can not find xesam:url"))?
-            .try_into()?;
+
+        let artists: Option<Vec<String>> = match value.get("xesam:artist") {
+            Some(v) => Some(v.try_clone()?.try_into()?),
+            None => None,
+        };
+
+        let title: Option<String> = match value.get("xesam:title") {
+            Some(v) => Some(v.try_into()?),
+            None => None,
+        };
+
+        let url: Option<String> = match value.get("xesam:url") {
+            Some(v) => Some(v.try_into()?),
+            None => None,
+        };
 
         // optional (basically only spotify implements this)
         let album_artist = match value.get("xesam:albumArtist") {
@@ -248,15 +253,16 @@ impl<'a> TryFrom<HashMap<String, Value<'a>>> for Metadata {
         // optional because players like browsers can not include the length when we request its
         // metadata but might give us the length later
         let length = match value.get("mpris:length") {
-            Some(Value::I64(s)) => Some(*s as u64),
+            Some(Value::I64(s)) => Some(s.cast_unsigned()),
             Some(Value::U64(s)) => Some(*s),
             None => None,
             _ => bail!("failed to find mpris:length"),
         };
-        let trackid: String = match value.get("mpris:trackid") {
-            Some(Value::ObjectPath(s)) => s.to_string(),
-            Some(Value::Str(s)) => s.to_string(),
-            _ => bail!("failed to find mpris:trackid"),
+
+        let trackid: Option<String> = match value.get("mpris:trackid") {
+            Some(Value::ObjectPath(s)) => Some(s.to_string()),
+            Some(Value::Str(s)) => Some(s.to_string()),
+            _ => None,
         };
 
         let album: Option<String> = match value.get("xesam:album") {
@@ -265,19 +271,20 @@ impl<'a> TryFrom<HashMap<String, Value<'a>>> for Metadata {
 
             _ => bail!("failed to find xesam:album"),
         };
-        let artists: Vec<String> = value
-            .get("xesam:artist")
-            .ok_or(anyhow!("failed to find xesam:artist"))?
-            .try_clone()?
-            .try_into()?;
-        let title: String = value
-            .get("xesam:title")
-            .ok_or(anyhow!("failed to find xesam:title"))?
-            .try_into()?;
-        let url: String = value
-            .get("xesam:url")
-            .ok_or(anyhow!("failed to find xesam:url"))?
-            .try_into()?;
+        let artists: Option<Vec<String>> = match value.get("xesam:artist") {
+            Some(v) => Some(v.try_clone()?.try_into()?),
+            None => None,
+        };
+
+        let title: Option<String> = match value.get("xesam:title") {
+            Some(v) => Some(v.try_into()?),
+            None => None,
+        };
+
+        let url: Option<String> = match value.get("xesam:url") {
+            Some(v) => Some(v.try_into()?),
+            None => None,
+        };
 
         // optional (basically only spotify implements this)
         let album_artist = match value.get("xesam:albumArtist") {
@@ -421,7 +428,7 @@ impl<'a> TryFrom<HashMap<&str, Value<'a>>> for PlayerCapabilities {
             .ok_or(anyhow!("can not find Position"))
             .map(|f| match f {
                 Value::U64(f) => Ok(*f),
-                Value::I64(f) => Ok(*f as u64),
+                Value::I64(f) => Ok(f.cast_unsigned()),
                 _ => Err(anyhow!("incorrect or unsupported type for Position")),
             })??;
 
@@ -454,11 +461,12 @@ pub struct PlayerBuilder<'a> {
 }
 
 impl<'a> PlayerBuilder<'a> {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    #[instrument(skip_all, err)]
+    #[instrument(skip(self, conn), err)]
     pub async fn stream(mut self, conn: &Connection, name: &str) -> anyhow::Result<Self> {
         let proxy = Proxy::new(
             conn,
@@ -475,7 +483,7 @@ impl<'a> PlayerBuilder<'a> {
         Ok(self)
     }
 
-    #[instrument(skip_all, err)]
+    #[instrument(skip(self, conn), err)]
     pub async fn capabilities(mut self, conn: &Connection, name: &str) -> anyhow::Result<Self> {
         let properties = conn
             .call_method(
@@ -496,6 +504,7 @@ impl<'a> PlayerBuilder<'a> {
         Ok(self)
     }
 
+    #[must_use]
     pub fn build(self) -> Player<'a> {
         Player {
             stream: self.stream.unwrap(),
@@ -553,6 +562,7 @@ impl<'a> Player<'a> {
         &mut self.stream
     }
 
+    #[must_use]
     pub fn capabilities(&self) -> &PlayerCapabilities {
         &self.capabilities
     }
@@ -581,10 +591,15 @@ pub enum MprisEvent {
     PlayerUpdated(PlayerUpdated),
 }
 
-#[derive(Debug)]
 pub struct MprisClient<'a> {
-    pub players: HashMap<String, Option<Player<'a>>>,
+    players: HashMap<String, Option<Player<'a>>>,
     owner_changed_signal: SignalStream<'a>,
+}
+
+impl Debug for MprisClient<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.players)
+    }
 }
 
 impl<'a> MprisClient<'a> {
@@ -614,7 +629,7 @@ impl<'a> MprisClient<'a> {
         Ok(())
     }
 
-    pub async fn get(&self, name: &str) -> anyhow::Result<Option<&Player<'a>>> {
+    pub fn get(&self, name: &str) -> anyhow::Result<Option<&Player<'a>>> {
         match self.players.get(name) {
             Some(p) => Ok(p.as_ref()),
             None => anyhow::bail!("value did not exist"),
@@ -665,13 +680,13 @@ impl<'a> MprisClient<'a> {
             if name.starts_with(MPRIS_PREFIX) {
                 match (old_owner.is_empty(), new_owner.is_empty()) {
                     (true, false) => {
+                        println!("added {name:?}");
                         let p = PlayerBuilder::default()
                             .stream(conn, &name)
                             .await?
                             .capabilities(conn, &name)
                             .await?
                             .build();
-                        println!("added {name:?}");
                         self.players.insert(name, Some(p));
                         return Ok(Poll::Ready(NameOwnerChanged::NewPlayer));
                     }
@@ -680,7 +695,7 @@ impl<'a> MprisClient<'a> {
                         match self.players.remove(&name) {
                             Some(_) => println!("removed player {name:?}"),
                             None => println!("key {name:?} does not exist in list of players"),
-                        };
+                        }
 
                         return Ok(Poll::Ready(NameOwnerChanged::RemovedPlayer));
                     }
@@ -693,7 +708,7 @@ impl<'a> MprisClient<'a> {
         Ok(Poll::Pending)
     }
 
-    pub async fn handle_player_changed(
+    pub fn handle_player_changed(
         &mut self,
         player: &mut Player<'a>,
         cx: &mut Context<'a>,
@@ -734,8 +749,8 @@ impl<'a> MprisClient<'a> {
         None
     }
 
-    pub async fn handle_players_changed(&mut self, cx: &mut Context<'a>) -> Option<MprisEvent> {
-        for (name, player) in self.players.iter_mut() {
+    pub fn handle_players_changed(&mut self, cx: &mut Context<'a>) -> Option<MprisEvent> {
+        for (name, player) in &mut self.players {
             if player.is_none() {
                 continue;
             }
@@ -780,15 +795,21 @@ impl<'a> MprisClient<'a> {
     }
 
     pub async fn event(&mut self, ctx: &mut Context<'a>, conn: &Connection) -> Option<MprisEvent> {
-        if let Some(event) = self.handle_players_changed(ctx).await {
-            info!(?event);
-            return Some(event);
-        }
         if let Ok(Poll::Ready(changed)) = self.handle_owner_changed(ctx, conn).await {
             info!(?changed);
             return Some(MprisEvent::NameOwnerChanged(changed));
         }
 
+        if let Some(event) = self.handle_players_changed(ctx) {
+            info!(?event);
+            return Some(event);
+        }
+
         None
+    }
+
+    #[must_use]
+    pub fn player_names(&'a self) -> hash_map::Iter<'a, String, Option<Player<'a>>> {
+        self.players.iter()
     }
 }
