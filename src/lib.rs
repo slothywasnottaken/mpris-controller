@@ -5,7 +5,7 @@ use std::{
     },
     fmt::Debug,
     pin::Pin,
-    task::{Context, Poll},
+    task::{Context, Poll, Waker},
 };
 
 use anyhow::{anyhow, bail};
@@ -594,6 +594,7 @@ pub enum MprisEvent {
 pub struct MprisClient<'a> {
     players: HashMap<String, Option<Player<'a>>>,
     owner_changed_signal: SignalStream<'a>,
+    waker: Waker,
 }
 
 impl Debug for MprisClient<'_> {
@@ -613,6 +614,7 @@ impl<'a> MprisClient<'a> {
         Ok(Self {
             players: HashMap::default(),
             owner_changed_signal: stream,
+            waker: futures::task::noop_waker(),
         })
     }
 
@@ -670,10 +672,10 @@ impl<'a> MprisClient<'a> {
     /// handles signal changed signal
     pub async fn handle_owner_changed(
         &mut self,
-        cx: &mut Context<'a>,
         conn: &Connection,
     ) -> anyhow::Result<Poll<NameOwnerChanged>> {
-        if let Poll::Ready(Some(msg)) = self.owner_changed_signal.poll_next_unpin(cx) {
+        let mut cx = Context::from_waker(&self.waker);
+        if let Poll::Ready(Some(msg)) = self.owner_changed_signal.poll_next_unpin(&mut cx) {
             let (name, old_owner, new_owner): (String, String, String) =
                 msg.body().deserialize()?;
 
@@ -749,13 +751,14 @@ impl<'a> MprisClient<'a> {
         None
     }
 
-    pub fn handle_players_changed(&mut self, cx: &mut Context<'a>) -> Option<MprisEvent> {
+    pub fn handle_players_changed(&mut self) -> Option<MprisEvent> {
+        let mut cx = Context::from_waker(&self.waker);
         for (name, player) in &mut self.players {
             if player.is_none() {
                 continue;
             }
             let player = player.as_mut().unwrap();
-            if let Poll::Ready(Some(msg)) = Pin::new(&mut player.stream).poll_next_unpin(cx) {
+            if let Poll::Ready(Some(msg)) = Pin::new(&mut player.stream).poll_next_unpin(&mut cx) {
                 let body = msg.body();
                 // returns interface (str), changed (vec), invalidated (vec), invalidated seems to always
                 // be empty
@@ -794,13 +797,27 @@ impl<'a> MprisClient<'a> {
         None
     }
 
-    pub async fn event(&mut self, ctx: &mut Context<'a>, conn: &Connection) -> Option<MprisEvent> {
-        if let Ok(Poll::Ready(changed)) = self.handle_owner_changed(ctx, conn).await {
+    pub async fn blocking_event(&mut self, conn: &Connection) -> MprisEvent {
+        loop {
+            if let Ok(Poll::Ready(changed)) = self.handle_owner_changed(conn).await {
+                info!(?changed);
+                return MprisEvent::NameOwnerChanged(changed);
+            }
+
+            if let Some(event) = self.handle_players_changed() {
+                info!(?event);
+                return event;
+            }
+        }
+    }
+
+    pub async fn non_blocking_event(&mut self, conn: &Connection) -> Option<MprisEvent> {
+        if let Ok(Poll::Ready(changed)) = self.handle_owner_changed(conn).await {
             info!(?changed);
             return Some(MprisEvent::NameOwnerChanged(changed));
         }
 
-        if let Some(event) = self.handle_players_changed(ctx) {
+        if let Some(event) = self.handle_players_changed() {
             info!(?event);
             return Some(event);
         }

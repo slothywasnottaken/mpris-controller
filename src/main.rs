@@ -1,5 +1,3 @@
-use std::task::Context;
-
 use mpris_controller::MprisClient;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
@@ -22,17 +20,13 @@ async fn main() {
 
     let conn = zbus::Connection::session().await.unwrap();
 
-    let waker = futures::task::noop_waker();
-    let mut ctx = Context::from_waker(&waker);
-
     let mut client = MprisClient::new(&conn).await.unwrap();
     client.get_all(&conn).await.unwrap();
 
     info!(?client);
 
     loop {
-        if let Some(ev) = client.event(&mut ctx, &conn).await {
-            println!("event: {ev:?}");
-        }
+        let ev = client.blocking_event(&conn).await;
+        println!("event: {ev:?}");
     }
 }
