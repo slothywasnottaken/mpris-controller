@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package format;
+
+message Format {
+  oneof Command {
+    string GetPlayer = 1;
+    string SetPlayer = 2;
+  }
+}

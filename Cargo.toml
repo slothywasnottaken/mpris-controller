@@ -1,14 +1,17 @@
-[package]
-name = "mpris-controller"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+members = ["client", "server", "lib"]
+resolver = "2"
 
-[dependencies]
+[workspace.dependencies]
+client = { path = "./client" }
+server = { path = "./server" }
+lib = { path = "./lib" }
 anyhow = "1.0.100"
+clap = { version = "4.5.53", features = ["derive"] }
 futures = "0.3.31"
 futures-core = "0.3.31"
 futures-util = "0.3.31"
-tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros", "signal"] }
 tracing = "0.1.43"
 tracing-appender = "0.2.4"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
