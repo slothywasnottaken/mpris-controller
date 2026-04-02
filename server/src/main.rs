@@ -1,59 +1,64 @@
 use std::{
-    io::{ErrorKind, Read},
+    io::{ErrorKind, Read, Write},
     os::unix::net::UnixListener,
 };
 
-use lib::{Command, Format, MprisClient};
+use lib::{Client, MprisClient};
 use prost::Message;
+use tracing::{info, level_filters::LevelFilter};
 
 #[tokio::main]
 async fn main() {
+    let _guard = tracing::subscriber::set_global_default(
+        tracing_subscriber::FmtSubscriber::builder()
+            .with_max_level(LevelFilter::INFO)
+            .finish(),
+    );
     let server = UnixListener::bind("/tmp/mpris-controller.sock").unwrap();
-    let mut sockets: Vec<std::os::unix::net::UnixStream> = vec![];
-    server.set_nonblocking(true).unwrap();
 
     let mut bytes = [0; 512];
-    let mut index = 0;
+    let mut send = vec![];
 
     let mut client = MprisClient::new().await.unwrap();
     client.get_all().await.unwrap();
 
-    loop {
-        if let Some(stream) = sockets.get_mut(index) {
-            match stream.read(&mut bytes) {
-                Ok(amount) => {
-                    if amount == 0 {
-                        sockets.remove(index);
-                    }
-                    if amount > 0 {
-                        println!("{sockets:?}");
-                        let command = Format::decode(&bytes[0..amount]).unwrap();
-                        if let Some(cmd) = command.command {
-                            match cmd {
-                                Command::GetPlayer(_) => todo!(),
-                                Command::SetPlayer(_) => todo!(),
-                            }
-                        }
-                        println!("{:?}", command);
-                    }
-                }
+    let mut player = client.currently_playing();
+    let (mut socket, _) = server.accept().unwrap();
 
-                Err(err) => {
-                    if err.kind() != ErrorKind::WouldBlock {
-                        panic!("{err:?}");
+    loop {
+        match socket.read(&mut bytes) {
+            Ok(amount) => {
+                if amount > 0 {
+                    let message = lib::format::Server::decode(&bytes[0..amount]).unwrap();
+                    info!("{message:?}");
+                    if let Some(msg) = message.command {
+                        info!("{msg:?}");
+                        match msg {
+                            lib::server::Command::SetPlayer(name) => {
+                                player = client.get(&name).unwrap()
+                            }
+                            lib::server::Command::GetPlayer(_) => {
+                                let client_message = Client {
+                                    current_player: player.unwrap().name().to_string(),
+                                };
+
+                                client_message.encode(&mut send).unwrap();
+
+                                _ = socket.write(&send);
+                            }
+                            lib::server::Command::PlayerStopped(_) => player = None,
+                        }
                     }
                 }
+                if amount == 0 {
+                    info!("client disconnected");
+                    break;
+                }
             }
-        } else {
-            index = 0;
-        }
-        match server.accept() {
-            Ok((sock, _addr)) => {
-                sockets.push(sock);
-            }
+
             Err(err) => {
                 if err.kind() != ErrorKind::WouldBlock {
-                    panic!("{err:?}");
+                    info!("{err:?}");
                 }
             }
         }

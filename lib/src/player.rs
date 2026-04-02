@@ -523,7 +523,7 @@ pub struct Player<'a> {
 }
 
 impl<'a> Player<'a> {
-    #[tracing::instrument(skip(conn), ret, err)]
+    // #[tracing::instrument(skip(conn), ret, err)]
     pub async fn new(conn: &Connection, name: String) -> anyhow::Result<Self> {
         let properties = conn
             .call_method(

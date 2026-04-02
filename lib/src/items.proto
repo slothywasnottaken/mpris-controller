@@ -2,9 +2,14 @@ syntax = "proto3";
 
 package format;
 
-message Format {
+message Client {
+  string CurrentPlayer = 1;
+}
+
+message Server {
   oneof Command {
-    string GetPlayer = 1;
-    string SetPlayer = 2;
-  }
+    string SetPlayer = 1;
+    bool GetPlayer = 2;
+    bool PlayerStopped = 3;
+  };
 }

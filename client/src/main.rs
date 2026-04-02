@@ -1,7 +1,12 @@
-use std::io::{ErrorKind, Read, Write};
+use std::{
+    io::{ErrorKind, Read, Write},
+    os::unix::net::UnixStream,
+    thread::sleep,
+    time::Duration,
+};
 
 use clap::Parser;
-use lib::{format, Format, MprisClient};
+use lib::{format, server::Command, Client, MprisClient, Server};
 use prost::Message;
 use tracing::info;
 use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
@@ -15,9 +20,20 @@ enum Cli {
     Url,
 }
 
+fn send_command(command: Server, buf: &mut Vec<u8>, socket: &mut UnixStream) {
+    command.encode(buf).unwrap();
+
+    socket.write_all(buf).unwrap();
+}
+
 #[tokio::main]
 async fn main() {
+    let mut server = std::os::unix::net::UnixStream::connect("/tmp/mpris-controller.sock").unwrap();
+
+    let mut bytes = vec![];
+
     let cli = Cli::parse();
+
     let user = std::env::home_dir().unwrap();
     let user = user.to_str().unwrap();
     let path = format!("{user}/.local/share/log");
@@ -34,27 +50,45 @@ async fn main() {
         .with_writer(file)
         .with_ansi(false)
         .init();
-
-    let mut bytes = vec![];
-
-    let format = Format {
-        command: Some(lib::Command::SetPlayer(String::from(
-            "org.mpris.MediaPlayer2.YoutubeMusic",
-        ))),
+    let mut client = MprisClient::new().await.unwrap();
+    client.get_all().await.unwrap();
+    println!("playing {:?}", client.currently_playing().unwrap().name());
+    let data = "org.mpris.MediaPlayer2.YoutubeMusic";
+    let message = Server {
+        command: Some(Command::SetPlayer(data.to_string())),
     };
 
-    format.encode(&mut bytes).unwrap();
+    send_command(message, &mut bytes, &mut server);
 
-    let m = Format::decode(&*bytes).unwrap();
+    let message = Server {
+        command: Some(Command::GetPlayer(true)),
+    };
 
-    println!("{m:?}");
+    send_command(message, &mut bytes, &mut server);
 
-    let mut server = std::os::unix::net::UnixStream::connect("/tmp/mpris-controller.sock").unwrap();
-    server.set_nonblocking(true).unwrap();
-    _ = server.write(&bytes);
+    let mut buff = [0; 512];
 
-    // let mut client = MprisClient::new().await.unwrap();
-    // client.get_all().await.unwrap();
+    loop {
+        match server.read(&mut buff) {
+            Ok(amt) => {
+                let msg = Client::decode(&buff[0..amt]).unwrap();
+                println!("{msg:?}");
+                break;
+            }
+            Err(e) => {
+                if e.kind() != ErrorKind::WouldBlock {
+                    panic!()
+                }
+            }
+        }
+    }
+
+    let message = Server {
+        command: Some(Command::PlayerStopped(true)),
+    };
+
+    send_command(message, &mut bytes, &mut server);
+
     //
     // match cli {
     //     Cli::Prev => {}

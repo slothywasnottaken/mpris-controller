@@ -12,7 +12,6 @@ pub mod format {
     include!(concat!(env!("OUT_DIR"), "/format.rs"));
 }
 
-pub use format::format::*;
 pub use format::*;
 
 use futures::StreamExt;
@@ -133,7 +132,7 @@ impl<'a> MprisClient<'a> {
         Ok(())
     }
 
-    pub fn get(&self, name: &'a str) -> anyhow::Result<Option<&Player<'a>>> {
+    pub fn get(&self, name: &str) -> anyhow::Result<Option<&Player<'a>>> {
         match self.player_names.get(name) {
             Some(id) => Ok(self.players.get(*id)),
             None => anyhow::bail!("value did not exist"),
@@ -158,7 +157,7 @@ impl<'a> MprisClient<'a> {
         Ok(names)
     }
 
-    #[instrument(skip_all, ret)]
+    // #[instrument(skip_all, ret)]
     pub async fn get_all(&mut self) -> anyhow::Result<()> {
         if !self.players.is_empty() {
             self.players.clear();
@@ -256,7 +255,7 @@ impl<'a> MprisClient<'a> {
         }
 
         if let Ok(Poll::Ready(changed)) = self.handle_owner_changed().await {
-            tracing::info!(?changed);
+            // tracing::info!(?changed);
         }
     }
 
@@ -265,11 +264,11 @@ impl<'a> MprisClient<'a> {
     }
 
     /// returns the first player it finds playing audio
-    pub fn currently_playing(&self) -> Vec<&Player<'a>> {
+    pub fn currently_playing(&self) -> Option<&Player<'a>> {
         self.players
             .iter()
-            .filter(|player| player.capabilities.playback_status == PlaybackStatus::Playing)
-            .collect::<Vec<_>>()
+            .find(|&player| player.capabilities.playback_status == PlaybackStatus::Playing)
+            .map(|v| v as _)
     }
 
     pub fn currently_playing_mut(&mut self) -> Vec<&mut Player<'a>> {
