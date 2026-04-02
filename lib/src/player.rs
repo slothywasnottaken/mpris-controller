@@ -5,7 +5,7 @@ use zbus::{
     names::{BusName, WellKnownName},
     proxy::SignalStream,
     zvariant::{ObjectPath, Str, Value},
-    Connection, Proxy,
+    Connection, Message, Proxy,
 };
 
 use std::{
@@ -636,7 +636,7 @@ impl<'a> Player<'a> {
         .unwrap();
     }
 
-    pub async fn pause_play(&self, conn: &Connection) {
+    pub async fn pause_play(&self, conn: &Connection) -> zbus::Result<Message> {
         conn.call_method(
             Some(&*self.name),
             "/org/mpris/MediaPlayer2",
@@ -645,7 +645,6 @@ impl<'a> Player<'a> {
             &(),
         )
         .await
-        .unwrap();
     }
 
     pub async fn seek(&self, conn: &Connection, nanos: u64) {

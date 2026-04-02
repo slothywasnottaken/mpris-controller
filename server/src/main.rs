@@ -51,8 +51,8 @@ async fn main() {
                     }
                 }
                 if amount == 0 {
+                    (socket, _) = server.accept().unwrap();
                     info!("client disconnected");
-                    break;
                 }
             }
 

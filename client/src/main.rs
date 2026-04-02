@@ -17,6 +17,8 @@ enum Cli {
     Playing,
     Prev,
     After,
+    Stop,
+    TogglePause,
     Url,
 }
 
@@ -52,13 +54,6 @@ async fn main() {
         .init();
     let mut client = MprisClient::new().await.unwrap();
     client.get_all().await.unwrap();
-    println!("playing {:?}", client.currently_playing().unwrap().name());
-    let data = "org.mpris.MediaPlayer2.YoutubeMusic";
-    let message = Server {
-        command: Some(Command::SetPlayer(data.to_string())),
-    };
-
-    send_command(message, &mut bytes, &mut server);
 
     let message = Server {
         command: Some(Command::GetPlayer(true)),
@@ -68,11 +63,13 @@ async fn main() {
 
     let mut buff = [0; 512];
 
+    let player_name;
+
     loop {
         match server.read(&mut buff) {
             Ok(amt) => {
                 let msg = Client::decode(&buff[0..amt]).unwrap();
-                println!("{msg:?}");
+                player_name = msg.current_player;
                 break;
             }
             Err(e) => {
@@ -83,44 +80,63 @@ async fn main() {
         }
     }
 
-    let message = Server {
-        command: Some(Command::PlayerStopped(true)),
-    };
+    match cli {
+        Cli::Prev => {
+            let playing = client.get(&player_name).unwrap().unwrap();
+            let conn = zbus::Connection::session().await.unwrap();
+            playing.prev(&conn).await;
+        }
+        Cli::After => {
+            let playing = client.get(&player_name).unwrap().unwrap();
+            let conn = zbus::Connection::session().await.unwrap();
+            playing.next(&conn).await;
+        }
+        Cli::Stop => {
+            let playing = client.get(&player_name).unwrap().unwrap();
+            let conn = zbus::Connection::session().await.unwrap();
+            playing.stop(&conn).await;
+        }
+        Cli::TogglePause => {
+            println!("player name {player_name:?}");
+            let playing = client.get(&player_name).unwrap().unwrap();
+            let conn = zbus::Connection::session().await.unwrap();
 
-    send_command(message, &mut bytes, &mut server);
+            if let Err(e) = playing.pause_play(&conn).await {
+                if e.description().unwrap().contains("PausePlay") {
+                    match playing.capabilities.playback_status {
+                        lib::player::PlaybackStatus::Stopped => playing.play(&conn).await,
+                        lib::player::PlaybackStatus::Paused => playing.play(&conn).await,
+                        lib::player::PlaybackStatus::Playing => playing.pause(&conn).await,
+                    }
+                }
+            }
+        }
+        Cli::Players => {
+            for player in client.player_names() {
+                print!("{} ", player.name())
+            }
+            println!();
+        }
+        Cli::Playing => {
+            let playing = client.get(&player_name).unwrap().unwrap();
+            let title = playing.capabilities.metadata.title().unwrap_or("");
+            let artists = playing.capabilities.metadata.artists();
 
-    //
-    // match cli {
-    //     Cli::Prev => {}
-    //     Cli::After => {}
-    //     Cli::Players => {
-    //         for player in client.player_names() {
-    //             print!("{} ", player.name())
-    //         }
-    //         println!();
-    //     }
-    //     Cli::Playing => {
-    //         for playing in client.currently_playing() {
-    //             let title = playing.capabilities.metadata.title().unwrap_or("");
-    //             let artists = playing.capabilities.metadata.artists();
-    //
-    //             let url = playing.capabilities.metadata.url().unwrap_or("");
-    //             print!("{} - ", title);
-    //             if let Some(a) = artists {
-    //                 for a in a {
-    //                     print!("{a} ");
-    //                 }
-    //             }
-    //             println!("{url}");
-    //         }
-    //     }
-    //     Cli::Url => {
-    //         for playing in client.currently_playing() {
-    //             let url = playing.capabilities.metadata.url().unwrap_or("");
-    //             println!("{url}");
-    //         }
-    //     }
-    // }
+            let url = playing.capabilities.metadata.url().unwrap_or("");
+            print!("{} - ", title);
+            if let Some(a) = artists {
+                for a in a {
+                    print!("{a} ");
+                }
+            }
+            println!("{url}");
+        }
+        Cli::Url => {
+            let playing = client.get(&player_name).unwrap().unwrap();
+            let url = playing.capabilities.metadata.url().unwrap_or("");
+            println!("{url}");
+        }
+    }
     //
     // info!(?client);
 }
