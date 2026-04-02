@@ -38,13 +38,15 @@ async fn main() {
                                 player = client.get(&name).unwrap()
                             }
                             lib::server::Command::GetPlayer(_) => {
-                                let client_message = Client {
-                                    current_player: player.unwrap().name().to_string(),
-                                };
+                                if let Some(pl) = player {
+                                    let client_message = Client {
+                                        current_player: pl.name().to_string(),
+                                    };
 
-                                client_message.encode(&mut send).unwrap();
+                                    client_message.encode(&mut send).unwrap();
 
-                                _ = socket.write(&send);
+                                    _ = socket.write(&send);
+                                }
                             }
                             lib::server::Command::PlayerStopped(_) => player = None,
                         }
