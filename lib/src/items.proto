@@ -3,13 +3,13 @@ syntax = "proto3";
 package format;
 
 message Client {
-  string CurrentPlayer = 1;
+  string GetFocusedPlayer = 1;
 }
 
 message Server {
   oneof Command {
-    string SetPlayer = 1;
+    string SetFocusedPlayer = 1;
     bool GetPlayer = 2;
-    bool PlayerStopped = 3;
+    bool UnfocusPlayer = 3;
   };
 }

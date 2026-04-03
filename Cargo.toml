@@ -1,6 +1,6 @@
 [workspace]
 members = ["client", "server", "lib"]
-resolver = "2"
+resolver = "3"
 
 [workspace.dependencies]
 client = { path = "./client" }

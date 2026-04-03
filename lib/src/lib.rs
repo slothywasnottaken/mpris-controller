@@ -139,6 +139,13 @@ impl<'a> MprisClient<'a> {
         }
     }
 
+    pub fn get_mut(&mut self, name: &str) -> anyhow::Result<Option<&mut Player<'a>>> {
+        match self.player_names.get_mut(name) {
+            Some(id) => Ok(self.players.get_mut(*id)),
+            None => anyhow::bail!("value did not exist"),
+        }
+    }
+
     pub async fn list_names(&mut self) -> anyhow::Result<Vec<String>> {
         let msg = self
             .connection
@@ -161,6 +168,7 @@ impl<'a> MprisClient<'a> {
     pub async fn get_all(&mut self) -> anyhow::Result<()> {
         if !self.players.is_empty() {
             self.players.clear();
+            self.player_names.clear();
         }
         let names = self.list_names().await?;
         for item in names {
@@ -264,18 +272,18 @@ impl<'a> MprisClient<'a> {
     }
 
     /// returns the first player it finds playing audio
-    pub fn currently_playing(&self) -> Option<&Player<'a>> {
+    pub fn currently_playing(&self) -> Option<&Player> {
         self.players
             .iter()
             .find(|&player| player.capabilities.playback_status == PlaybackStatus::Playing)
             .map(|v| v as _)
     }
 
-    pub fn currently_playing_mut(&mut self) -> Vec<&mut Player<'a>> {
+    pub fn currently_playing_mut(&'a mut self) -> Option<&mut Player> {
         self.players
             .iter_mut()
-            .filter(|player| player.capabilities.playback_status == PlaybackStatus::Playing)
-            .collect::<Vec<_>>()
+            .find(|player| player.capabilities.playback_status == PlaybackStatus::Playing)
+            .map(|v| v as _)
     }
 }
 

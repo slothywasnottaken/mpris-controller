@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail};
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use tracing::instrument;
 use zbus::{
     names::{BusName, WellKnownName},
@@ -10,6 +10,7 @@ use zbus::{
 
 use std::{
     collections::HashMap,
+    pin::Pin,
     task::{Context, Poll},
 };
 
@@ -740,7 +741,7 @@ impl std::fmt::Debug for Player<'_> {
 pub async fn poll_player<'a>(stream: &mut SignalStream<'a>) -> anyhow::Result<Poll<PlayerUpdated>> {
     let waker = WAKER;
     let mut cx = Context::from_waker(&waker);
-    if let Poll::Ready(Some(msg)) = stream.poll_next_unpin(&mut cx) {
+    if let Poll::Ready(Some(msg)) = SignalStream::poll_next(Pin::new(stream), &mut cx) {
         let body = msg.body();
         // returns interface (str), changed (vec), invalidated (vec), invalidated seems to always
         // be empty

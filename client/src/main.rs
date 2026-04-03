@@ -19,6 +19,8 @@ enum Cli {
     After,
     Stop,
     TogglePause,
+    Pause,
+    Play,
     Url,
 }
 
@@ -30,7 +32,12 @@ fn send_command(command: Server, buf: &mut Vec<u8>, socket: &mut UnixStream) {
 
 #[tokio::main]
 async fn main() {
+    std::panic::set_hook(Box::new(|panic_info| {
+        println!("panic occurred: {panic_info}");
+    }));
+
     let mut server = std::os::unix::net::UnixStream::connect("/tmp/mpris-controller.sock").unwrap();
+    server.set_nonblocking(true).unwrap();
 
     let mut bytes = vec![];
 
@@ -42,7 +49,7 @@ async fn main() {
     let file = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
-        .truncate(true)
+        .truncate(false)
         .open(&path)
         .expect("truncating log file failed");
 
@@ -69,7 +76,7 @@ async fn main() {
         match server.read(&mut buff) {
             Ok(amt) => {
                 let msg = Client::decode(&buff[0..amt]).unwrap();
-                player_name = msg.current_player;
+                player_name = msg.get_focused_player;
                 break;
             }
             Err(e) => {
@@ -101,15 +108,41 @@ async fn main() {
             let playing = client.get(&player_name).unwrap().unwrap();
             let conn = zbus::Connection::session().await.unwrap();
 
-            if let Err(e) = playing.pause_play(&conn).await {
-                if e.description().unwrap().contains("PausePlay") {
-                    match playing.capabilities.playback_status {
-                        lib::player::PlaybackStatus::Stopped => playing.play(&conn).await,
-                        lib::player::PlaybackStatus::Paused => playing.play(&conn).await,
-                        lib::player::PlaybackStatus::Playing => playing.pause(&conn).await,
-                    }
+            match playing.capabilities.playback_status {
+                lib::player::PlaybackStatus::Stopped => playing.play(&conn).await,
+                lib::player::PlaybackStatus::Paused => playing.play(&conn).await,
+                lib::player::PlaybackStatus::Playing => {
+                    playing.pause(&conn).await;
+
+                    let message = Server {
+                        command: Some(Command::UnfocusPlayer(true)),
+                    };
+
+                    send_command(message, &mut bytes, &mut server);
                 }
             }
+        }
+        Cli::Pause => {
+            println!("player name {player_name:?}");
+            let playing = client.get(&player_name).unwrap().unwrap();
+            let conn = zbus::Connection::session().await.unwrap();
+            playing.pause(&conn).await;
+
+            let message = Server {
+                command: Some(Command::UnfocusPlayer(true)),
+            };
+            send_command(message, &mut bytes, &mut server);
+        }
+        Cli::Play => {
+            println!("player name {player_name:?}");
+            let playing = client.get(&player_name).unwrap().unwrap();
+            let conn = zbus::Connection::session().await.unwrap();
+            playing.play(&conn).await;
+
+            let message = Server {
+                command: Some(Command::UnfocusPlayer(true)),
+            };
+            send_command(message, &mut bytes, &mut server);
         }
         Cli::Players => {
             for player in client.player_names() {
