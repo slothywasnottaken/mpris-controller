@@ -13,6 +13,5 @@ message Server {
   oneof Command {
     string SetFocusedPlayer = 1;
     bool GetPlayer = 2;
-    bool UnfocusPlayer = 3;
   };
 }

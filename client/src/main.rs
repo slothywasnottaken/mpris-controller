@@ -5,7 +5,7 @@ use std::{
 };
 
 use clap::Parser;
-use lib::{Client, MprisClient, Server, server::Command};
+use lib::{Client, MprisClient, Server, player::Metadata, server::Command};
 use prost::Message;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
@@ -179,12 +179,6 @@ async fn main() {
                     lib::player::PlaybackStatus::Paused => playing.play(&conn).await,
                     lib::player::PlaybackStatus::Playing => {
                         playing.pause(&conn).await;
-
-                        let message = Server {
-                            command: Some(Command::UnfocusPlayer(true)),
-                        };
-
-                        send_command(message, &mut bytes, &mut server);
                     }
                 }
             }
@@ -193,22 +187,12 @@ async fn main() {
                 let playing = client.get(&player_name).unwrap();
                 let conn = zbus::Connection::session().await.unwrap();
                 playing.pause(&conn).await;
-
-                let message = Server {
-                    command: Some(Command::UnfocusPlayer(true)),
-                };
-                send_command(message, &mut bytes, &mut server);
             }
             Cli::Play => {
                 println!("player name {player_name:?}");
                 let playing = client.get(&player_name).unwrap();
                 let conn = zbus::Connection::session().await.unwrap();
                 playing.play(&conn).await;
-
-                let message = Server {
-                    command: Some(Command::UnfocusPlayer(true)),
-                };
-                send_command(message, &mut bytes, &mut server);
             }
             Cli::Players => {
                 for player in client.player_names() {
@@ -239,10 +223,9 @@ async fn main() {
                 let mut fmt = String::new();
                 let playing = client.get(&player_name).unwrap();
                 let metadata = &playing.capabilities().metadata;
-                if data.art_url
-                    && let Some(art_url) = metadata.art_url()
-                {
-                    print!("{art_url} ");
+                if data.art_url {
+                    fmt.write_fmt(format_args!("{} ", metadata.url().unwrap_or("")))
+                        .unwrap();
                 }
                 if data.length {
                     let mut printable_len = [0; 3];
@@ -284,50 +267,34 @@ async fn main() {
                     }
                 }
 
-                if data.trackid
-                    && let Some(id) = metadata.track_id()
-                {
-                    print!("{id} ");
+                if data.trackid {
+                    print!("{} ", metadata.track_id().unwrap_or(""));
                 }
-                if data.album
-                    && let Some(album) = metadata.album()
-                {
-                    print!("{album} ");
+                if data.album {
+                    print!("{} ", metadata.album().unwrap_or(""));
                 }
                 if data.artists
                     && let Some(artists) = metadata.artists()
                 {
-                    if artists.len() == 1 {
-                        print!("{} ", artists[0]);
-                    } else {
-                        for (i, art) in artists.iter().enumerate() {
-                            if i >= artists.len() {
-                                print!("{art} ")
-                            } else {
-                                print!("{art}, ")
-                            }
+                    for (i, art) in artists.iter().enumerate() {
+                        if i >= artists.len() {
+                            print!("{art} ")
+                        } else {
+                            print!("{art}, ")
                         }
                     }
                 }
-                if data.title
-                    && let Some(title) = metadata.title()
-                {
-                    print!("{title} ");
+                if data.title {
+                    print!("{} ", metadata.title().unwrap_or(""));
                 }
-                if data.url
-                    && let Some(url) = metadata.url()
-                {
-                    print!("{url} ");
+                if data.url {
+                    print!("{} ", metadata.url().unwrap_or(""));
                 }
-                if data.track_number
-                    && let Some(number) = metadata.track_number()
-                {
-                    print!("{number} ");
+                if data.track_number {
+                    print!("{} ", metadata.track_number().unwrap_or(0));
                 }
-                if data.auto_rating
-                    && let Some(rating) = metadata.auto_rating()
-                {
-                    print!("{rating} ");
+                if data.auto_rating {
+                    print!("{} ", metadata.auto_rating().unwrap_or(0.0));
                 }
                 if data.album_artists
                     && let Some(artists) = metadata.album_artists()

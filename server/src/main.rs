@@ -61,29 +61,28 @@ async fn main() {
                                     println!("{}", player.is_some());
                                     match player {
                                         Some(p) => {
-                                            let cur = client.get_from_id(p).unwrap();
-                                            if cur.capabilities().playback_status
-                                                != PlaybackStatus::Playing
+                                            if let Some(curent) = client.currently_playing()
+                                                && let Some(p) = player
                                             {
-                                                match client.currently_playing() {
-                                                    Some(p) => {
-                                                        player = client.get_id(p.name());
-                                                    }
-                                                    None => {
-                                                        let client_message = Client {
-                                            message: Some(lib::client::Message::CouldNotFindPlayer(
-                                                true,
-                                            )),
-                                        };
-
-                                                        client_message.encode(&mut send).unwrap();
-
-                                                        info!("sent {:?}", send.len());
-                                                        _ = sock.write(&send);
-                                                        send.clear();
-                                                    }
+                                                let real = client.get_from_id(p).unwrap();
+                                                if curent.name() != real.name() {
+                                                    player = client.get_id(curent.name());
                                                 }
                                             }
+                                            let client_message = Client {
+                                                message: Some(lib::client::Message::FocusedPlayer(
+                                                    client
+                                                        .get_from_id(p)
+                                                        .unwrap()
+                                                        .name()
+                                                        .to_string(),
+                                                )),
+                                            };
+
+                                            client_message.encode(&mut send).unwrap();
+
+                                            _ = sock.write(&send);
+                                            send.clear();
                                         }
 
                                         None => {
@@ -107,22 +106,6 @@ async fn main() {
                                             }
                                         }
                                     }
-
-                                    if let Some(p) = player {
-                                        let client_message = Client {
-                                            message: Some(lib::client::Message::FocusedPlayer(
-                                                client.get_from_id(p).unwrap().name().to_string(),
-                                            )),
-                                        };
-
-                                        client_message.encode(&mut send).unwrap();
-
-                                        _ = sock.write(&send);
-                                        send.clear();
-                                    }
-                                }
-                                lib::server::Command::UnfocusPlayer(_) => {
-                                    player = None;
                                 }
                             }
                         }

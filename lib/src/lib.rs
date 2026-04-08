@@ -3,6 +3,7 @@ use std::{
     fmt::Debug,
     ptr::null,
     slice::Iter,
+    sync::{Arc, LazyLock, RwLock},
     task::{Poll, RawWaker, RawWakerVTable, Waker},
 };
 
@@ -14,6 +15,7 @@ pub mod format {
 
 pub use format::*;
 
+use tokio::sync::Mutex;
 use zbus::{
     names::{BusName, MemberName, WellKnownName},
     proxy::SignalStream,
@@ -100,7 +102,8 @@ impl TryFrom<DbusSignals> for MemberName<'_> {
     }
 }
 
-static mut SIGNAL_STREAM: Vec<(usize, SignalStream<'static>)> = Vec::new();
+static mut SIGNAL_STREAM: LazyLock<Arc<Mutex<Vec<(usize, SignalStream<'static>)>>>> =
+    std::sync::LazyLock::new(|| Arc::new(Mutex::new(Vec::new())));
 
 pub struct MprisClient {
     player_names: HashMap<String, usize>,
@@ -140,7 +143,7 @@ impl MprisClient {
         let stream = proxy.receive_signal(DbusSignals::PropertiesChanged).await?;
 
         unsafe {
-            SIGNAL_STREAM.push((self.next_id, stream));
+            SIGNAL_STREAM.lock().await.push((self.next_id, stream));
         }
         let player = Player::new(&self.connection, name).await?;
 
@@ -251,7 +254,8 @@ impl MprisClient {
     pub async fn handle_player_changed(player: &mut Player, index: usize) -> anyhow::Result<()> {
         unsafe {
             if let Poll::Ready(ev) =
-                player::poll_player(&mut SIGNAL_STREAM.get_mut(index).unwrap().1).await?
+                player::poll_player(&mut SIGNAL_STREAM.lock().await.get_mut(index).unwrap().1)
+                    .await?
             {
                 match ev {
                     PlayerUpdated::PlaybackStatus(playback_status) => {
@@ -281,10 +285,10 @@ impl MprisClient {
     pub async fn event(&mut self) {
         for (i, player) in self.players.iter_mut().enumerate() {
             unsafe {
-                if let Poll::Ready(ev) =
-                    player::poll_player(&mut SIGNAL_STREAM.get_mut(i).unwrap().1)
-                        .await
-                        .expect("error polling player")
+                let mut lock = SIGNAL_STREAM.lock().await;
+                if let Poll::Ready(ev) = player::poll_player(&mut lock.get_mut(i).unwrap().1)
+                    .await
+                    .expect("error polling player")
                 {
                     match ev {
                         PlayerUpdated::PlaybackStatus(playback_status) => {

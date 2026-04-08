@@ -10,6 +10,7 @@ tracing-subscriber.workspace = true
 tracing-appender.workspace = true 
 futures.workspace = true
 zbus.workspace = true
+tokio = { workspace = true, features = ["macros", "sync"] }
 prost = "0.14.3"
 bytes = "1.11.1"
 
