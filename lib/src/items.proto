@@ -3,7 +3,10 @@ syntax = "proto3";
 package format;
 
 message Client {
-  string GetFocusedPlayer = 1;
+  oneof Message {
+  string FocusedPlayer = 1;
+  bool CouldNotFindPlayer = 2;
+  }
 }
 
 message Server {

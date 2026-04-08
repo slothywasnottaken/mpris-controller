@@ -1,14 +1,10 @@
 use std::{
     io::{ErrorKind, Read, Write},
     os::unix::net::UnixListener,
-    task::Poll,
     time::Duration,
 };
 
-use lib::{
-    Client, MprisClient,
-    player::{self, PlaybackStatus, Player, PlayerUpdated},
-};
+use lib::{Client, MprisClient, player::PlaybackStatus};
 use prost::Message;
 use tracing::{info, level_filters::LevelFilter};
 
@@ -24,7 +20,6 @@ async fn main() {
         std::fs::remove_file(path).unwrap();
     }
     let server = UnixListener::bind("/tmp/mpris-controller.sock").unwrap();
-    server.set_nonblocking(true).unwrap();
 
     let mut bytes = [0; 512];
     let mut send = vec![];
@@ -59,47 +54,76 @@ async fn main() {
                             info!("{msg:?}");
                             match msg {
                                 lib::server::Command::SetFocusedPlayer(name) => {
-                                    player = client.get(&name).unwrap()
+                                    player = client.get_id(&name)
                                 }
                                 lib::server::Command::GetPlayer(_) => {
+                                    client.event().await;
+                                    println!("{}", player.is_some());
                                     match player {
                                         Some(p) => {
-                                            if p.capabilities().playback_status
+                                            let cur = client.get_from_id(p).unwrap();
+                                            if cur.capabilities().playback_status
                                                 != PlaybackStatus::Playing
                                             {
                                                 match client.currently_playing() {
                                                     Some(p) => {
-                                                        player = Some(p);
+                                                        player = client.get_id(p.name());
                                                     }
-                                                    None => panic!(),
+                                                    None => {
+                                                        let client_message = Client {
+                                            message: Some(lib::client::Message::CouldNotFindPlayer(
+                                                true,
+                                            )),
+                                        };
+
+                                                        client_message.encode(&mut send).unwrap();
+
+                                                        info!("sent {:?}", send.len());
+                                                        _ = sock.write(&send);
+                                                        send.clear();
+                                                    }
                                                 }
                                             }
                                         }
-                                        None => match client.currently_playing() {
-                                            Some(p) => {
-                                                player = Some(p);
+
+                                        None => {
+                                            match client.currently_playing() {
+                                                Some(p) => {
+                                                    player = client.get_id(p.name());
+                                                }
+                                                None => {
+                                                    let client_message = Client {
+                                            message: Some(lib::client::Message::CouldNotFindPlayer(
+                                                true,
+                                            ))
+                                                };
+
+                                                    client_message.encode(&mut send).unwrap();
+
+                                                    info!("sent {:?}", send.len());
+                                                    _ = sock.write(&send);
+                                                    send.clear();
+                                                }
                                             }
-                                            None => panic!(),
-                                        },
+                                        }
                                     }
 
                                     if let Some(p) = player {
                                         let client_message = Client {
-                                            get_focused_player: p.name().to_string(),
+                                            message: Some(lib::client::Message::FocusedPlayer(
+                                                client.get_from_id(p).unwrap().name().to_string(),
+                                            )),
                                         };
 
                                         client_message.encode(&mut send).unwrap();
 
                                         _ = sock.write(&send);
+                                        send.clear();
                                     }
                                 }
-                                lib::server::Command::UnfocusPlayer(_) => loop {
-                                    client.event().await;
-                                    if let Some(p) = client.currently_playing() {
-                                        player = Some(p);
-                                        break;
-                                    }
-                                },
+                                lib::server::Command::UnfocusPlayer(_) => {
+                                    player = None;
+                                }
                             }
                         }
                     }
@@ -112,6 +136,7 @@ async fn main() {
                 Err(err) => {
                     if err.kind() != ErrorKind::WouldBlock {
                         info!("{err:?}");
+                        socket = None;
                     }
                 }
             },

@@ -14,11 +14,13 @@ pub mod format {
 
 pub use format::*;
 
-use futures::StreamExt;
-use tracing::instrument;
-use zbus::{names::MemberName, proxy::SignalStream, Connection, Proxy};
+use zbus::{
+    names::{BusName, MemberName, WellKnownName},
+    proxy::SignalStream,
+    Connection, Proxy,
+};
 
-use crate::player::{NameOwnerChanged, PlaybackStatus, Player, PlayerUpdated};
+use crate::player::{PlaybackStatus, Player, PlayerUpdated};
 
 const unsafe fn noop_clone(_data: *const ()) -> RawWaker {
     noop_raw_waker()
@@ -48,7 +50,7 @@ pub const fn noop_waker() -> Waker {
     unsafe { Waker::from_raw(noop_raw_waker()) }
 }
 
-pub(crate) const WAKER: Waker = noop_waker();
+pub const WAKER: Waker = noop_waker();
 
 pub const MPRIS_PREFIX: &str = "org.mpris.MediaPlayer2";
 pub const MPRIS_PATH: &str = "/org/mpris/MediaPlayer2";
@@ -98,33 +100,48 @@ impl TryFrom<DbusSignals> for MemberName<'_> {
     }
 }
 
-pub struct MprisClient<'a> {
+static mut SIGNAL_STREAM: Vec<(usize, SignalStream<'static>)> = Vec::new();
+
+pub struct MprisClient {
     player_names: HashMap<String, usize>,
-    players: Vec<Player<'a>>,
-    owner_changed_signal: SignalStream<'a>,
+    players: Vec<Player>,
+    // owner_changed_signal: SignalStream<'a>,
     next_id: usize,
     connection: Connection,
 }
 
-impl<'a> MprisClient<'a> {
+impl MprisClient {
     pub async fn new() -> anyhow::Result<Self> {
         let connection = Connection::session().await?;
-        let name_changed = Proxy::new(&connection, DBUS_NAME, DBUS_PATH, DBUS_NAME).await?;
+        // let name_changed = Proxy::new(&connection, DBUS_NAME, DBUS_PATH, DBUS_NAME).await?;
 
-        let stream = name_changed
-            .receive_signal(DbusSignals::NameOwnerChanged)
-            .await?;
+        // let stream = name_changed
+        //     .receive_signal(DbusSignals::NameOwnerChanged)
+        //     .await?;
 
         Ok(Self {
             player_names: HashMap::default(),
             players: Vec::new(),
-            owner_changed_signal: stream,
+            // owner_changed_signal: stream,
             next_id: 0,
             connection,
         })
     }
 
     pub async fn add(&mut self, name: String) -> anyhow::Result<()> {
+        let proxy = Proxy::new(
+            &self.connection,
+            BusName::WellKnown(WellKnownName::from_str_unchecked(&name)),
+            MPRIS_PATH,
+            DBUS_PROPERTIES,
+        )
+        .await?;
+
+        let stream = proxy.receive_signal(DbusSignals::PropertiesChanged).await?;
+
+        unsafe {
+            SIGNAL_STREAM.push((self.next_id, stream));
+        }
         let player = Player::new(&self.connection, name).await?;
 
         self.players.push(player);
@@ -132,18 +149,30 @@ impl<'a> MprisClient<'a> {
         Ok(())
     }
 
-    pub fn get(&self, name: &str) -> anyhow::Result<Option<&Player<'a>>> {
+    pub fn get(&self, name: &str) -> Option<&Player> {
         match self.player_names.get(name) {
-            Some(id) => Ok(self.players.get(*id)),
-            None => anyhow::bail!("value did not exist"),
+            Some(id) => self.players.get(*id),
+            None => None,
         }
     }
 
-    pub fn get_mut(&mut self, name: &str) -> anyhow::Result<Option<&mut Player<'a>>> {
+    pub fn get_id(&self, name: &str) -> Option<usize> {
+        self.player_names.get(name).copied()
+    }
+
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut Player> {
         match self.player_names.get_mut(name) {
-            Some(id) => Ok(self.players.get_mut(*id)),
-            None => anyhow::bail!("value did not exist"),
+            Some(id) => self.players.get_mut(*id),
+            None => None,
         }
+    }
+
+    pub fn get_from_id(&self, id: usize) -> Option<&Player> {
+        self.players.get(id)
+    }
+
+    pub fn get_from_id_mut(&mut self, id: usize) -> Option<&mut Player> {
+        self.players.get_mut(id)
     }
 
     pub async fn list_names(&mut self) -> anyhow::Result<Vec<String>> {
@@ -169,6 +198,7 @@ impl<'a> MprisClient<'a> {
         if !self.players.is_empty() {
             self.players.clear();
             self.player_names.clear();
+            self.next_id = 0;
         }
         let names = self.list_names().await?;
         for item in names {
@@ -182,51 +212,55 @@ impl<'a> MprisClient<'a> {
         Ok(())
     }
 
-    /// handles signal changed signal
-    pub async fn handle_owner_changed(&mut self) -> anyhow::Result<Poll<NameOwnerChanged>> {
-        let waker = WAKER;
-        let mut cx = std::task::Context::from_waker(&waker);
-        if let Poll::Ready(Some(msg)) = self.owner_changed_signal.poll_next_unpin(&mut cx) {
-            let body = msg.body();
-            let (name, old_owner, new_owner): (String, &str, &str) = body.deserialize()?;
+    // handles signal changed signal
+    // pub async fn handle_owner_changed(&mut self) -> anyhow::Result<Poll<NameOwnerChanged>> {
+    //     let waker = WAKER;
+    //     let mut cx = std::task::Context::from_waker(&waker);
+    //     if let Poll::Ready(Some(msg)) = self.owner_changed_signal.poll_next_unpin(&mut cx) {
+    //         let body = msg.body();
+    //         let (name, old_owner, new_owner): (String, &str, &str) = body.deserialize()?;
+    //
+    //         if name.starts_with(MPRIS_PREFIX) {
+    //             match (old_owner.is_empty(), new_owner.is_empty()) {
+    //                 (true, false) => {
+    //                     println!("added {name:?}");
+    //                     self.player_names.insert(name.clone(), self.next_id);
+    //
+    //                     self.players
+    //                         .insert(self.next_id, Player::new(&self.connection, name).await?);
+    //                     self.next_id += 1;
+    //                     return Ok(Poll::Ready(NameOwnerChanged::NewPlayer));
+    //                 }
+    //                 // removed player
+    //                 (false, true) => {
+    //                     if let Some(id) = self.player_names.get(&name) {
+    //                         self.players.remove(*id);
+    //
+    //                         return Ok(Poll::Ready(NameOwnerChanged::RemovedPlayer));
+    //                     }
+    //                 }
+    //
+    //                 _ => {}
+    //             }
+    //         }
+    //     }
+    //
+    //     Ok(Poll::Pending)
+    // }
 
-            if name.starts_with(MPRIS_PREFIX) {
-                match (old_owner.is_empty(), new_owner.is_empty()) {
-                    (true, false) => {
-                        println!("added {name:?}");
-                        self.player_names.insert(name.clone(), self.next_id);
-
-                        self.players
-                            .insert(self.next_id, Player::new(&self.connection, name).await?);
-                        self.next_id += 1;
-                        return Ok(Poll::Ready(NameOwnerChanged::NewPlayer));
+    pub async fn handle_player_changed(player: &mut Player, index: usize) -> anyhow::Result<()> {
+        unsafe {
+            if let Poll::Ready(ev) =
+                player::poll_player(&mut SIGNAL_STREAM.get_mut(index).unwrap().1).await?
+            {
+                match ev {
+                    PlayerUpdated::PlaybackStatus(playback_status) => {
+                        player.capabilities.playback_status = playback_status
                     }
-                    // removed player
-                    (false, true) => {
-                        if let Some(id) = self.player_names.get(&name) {
-                            self.players.remove(*id);
-
-                            return Ok(Poll::Ready(NameOwnerChanged::RemovedPlayer));
-                        }
+                    PlayerUpdated::Metadata(metadata) => player.capabilities.metadata = *metadata,
+                    PlayerUpdated::CanGoPrevious(can_previous) => {
+                        player.capabilities.can_previous = can_previous;
                     }
-
-                    _ => {}
-                }
-            }
-        }
-
-        Ok(Poll::Pending)
-    }
-
-    pub async fn handle_player_changed(player: &mut Player<'a>) -> anyhow::Result<()> {
-        if let Poll::Ready(ev) = player::poll_player(player.stream_mut()).await? {
-            match ev {
-                PlayerUpdated::PlaybackStatus(playback_status) => {
-                    player.capabilities.playback_status = playback_status
-                }
-                PlayerUpdated::Metadata(metadata) => player.capabilities.metadata = *metadata,
-                PlayerUpdated::CanGoPrevious(can_previous) => {
-                    player.capabilities.can_previous = can_previous;
                 }
             }
         }
@@ -238,36 +272,41 @@ impl<'a> MprisClient<'a> {
         for id in self.player_names.values() {
             let _ = MprisClient::handle_player_changed(
                 self.players.get_mut(*id).expect("invalid player id"),
+                *id,
             )
             .await;
         }
     }
 
     pub async fn event(&mut self) {
-        for player in self.players.iter_mut() {
-            let Poll::Ready(ev) = player::poll_player(player.stream_mut())
-                .await
-                .expect("failed to poll player")
-            else {
-                continue;
-            };
-            match ev {
-                PlayerUpdated::PlaybackStatus(playback_status) => {
-                    player.capabilities.playback_status = playback_status
+        for (i, player) in self.players.iter_mut().enumerate() {
+            unsafe {
+                if let Poll::Ready(ev) =
+                    player::poll_player(&mut SIGNAL_STREAM.get_mut(i).unwrap().1)
+                        .await
+                        .expect("error polling player")
+                {
+                    match ev {
+                        PlayerUpdated::PlaybackStatus(playback_status) => {
+                            player.capabilities.playback_status = playback_status
+                        }
+                        PlayerUpdated::Metadata(metadata) => {
+                            player.capabilities.metadata = *metadata
+                        }
+                        PlayerUpdated::CanGoPrevious(can_previous) => {
+                            player.capabilities.can_previous = can_previous;
+                        }
+                    };
                 }
-                PlayerUpdated::Metadata(metadata) => player.capabilities.metadata = *metadata,
-                PlayerUpdated::CanGoPrevious(can_previous) => {
-                    player.capabilities.can_previous = can_previous;
-                }
-            };
+            }
         }
 
-        if let Ok(Poll::Ready(changed)) = self.handle_owner_changed().await {
-            // tracing::info!(?changed);
-        }
+        // if let Ok(Poll::Ready(changed)) = self.handle_owner_changed().await {
+        // tracing::info!(?changed);
+        // }
     }
 
-    pub fn player_names(&'a self) -> Iter<'a, Player<'a>> {
+    pub fn player_names(&self) -> Iter<'_, Player> {
         self.players.iter()
     }
 
@@ -279,7 +318,7 @@ impl<'a> MprisClient<'a> {
             .map(|v| v as _)
     }
 
-    pub fn currently_playing_mut(&'a mut self) -> Option<&mut Player> {
+    pub fn currently_playing_mut(&mut self) -> Option<&mut Player> {
         self.players
             .iter_mut()
             .find(|player| player.capabilities.playback_status == PlaybackStatus::Playing)
@@ -287,7 +326,7 @@ impl<'a> MprisClient<'a> {
     }
 }
 
-impl Debug for MprisClient<'_> {
+impl Debug for MprisClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self.players)
     }

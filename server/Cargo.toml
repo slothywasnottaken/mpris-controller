@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 lib.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["macros", "net"] }
 futures-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true 

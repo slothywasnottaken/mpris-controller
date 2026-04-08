@@ -1,11 +1,10 @@
 use anyhow::{anyhow, bail};
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use tracing::instrument;
 use zbus::{
-    names::{BusName, WellKnownName},
     proxy::SignalStream,
     zvariant::{ObjectPath, Str, Value},
-    Connection, Message, Proxy,
+    Connection, Message,
 };
 
 use std::{
@@ -14,7 +13,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use crate::{DbusMethods, DbusSignals, DBUS_PROPERTIES, MPRIS_PATH, MPRIS_PLAYER_PREFIX, WAKER};
+use crate::{DbusMethods, DBUS_PROPERTIES, MPRIS_PATH, MPRIS_PLAYER_PREFIX, WAKER};
 
 #[derive(Debug)]
 pub enum NameOwnerChanged {
@@ -517,13 +516,13 @@ pub enum MprisEvent {
     PlayerUpdated(PlayerUpdated),
 }
 
-pub struct Player<'a> {
+pub struct Player {
     pub capabilities: Capabilities,
-    pub stream: SignalStream<'a>,
+    // pub stream: SignalStream<'a>,
     name: String,
 }
 
-impl<'a> Player<'a> {
+impl Player {
     // #[tracing::instrument(skip(conn), ret, err)]
     pub async fn new(conn: &Connection, name: String) -> anyhow::Result<Self> {
         let properties = conn
@@ -539,30 +538,30 @@ impl<'a> Player<'a> {
         let body = properties.body();
         let properties: Capabilities = body.deserialize::<HashMap<&str, Value>>()?.try_into()?;
 
-        let proxy = Proxy::new(
-            conn,
-            BusName::WellKnown(WellKnownName::from_str_unchecked(&name)),
-            MPRIS_PATH,
-            DBUS_PROPERTIES,
-        )
-        .await?;
+        // let proxy = Proxy::new(
+        //     conn,
+        //     BusName::WellKnown(WellKnownName::from_str_unchecked(&name)),
+        //     MPRIS_PATH,
+        //     DBUS_PROPERTIES,
+        // )
+        // .await?;
 
-        let stream = proxy.receive_signal(DbusSignals::PropertiesChanged).await?;
+        // let stream = proxy.receive_signal(DbusSignals::PropertiesChanged).await?;
 
         Ok(Self {
             capabilities: properties,
-            stream,
+            // stream,
             name,
         })
     }
 
-    pub fn stream_mut(&mut self) -> &mut SignalStream<'a> {
-        &mut self.stream
-    }
-
-    pub fn stream(&self) -> &SignalStream<'a> {
-        &self.stream
-    }
+    // pub fn stream_mut(&mut self) -> &mut SignalStream<'a> {
+    //     &mut self.stream
+    // }
+    //
+    // pub fn stream(&self) -> &SignalStream<'a> {
+    //     &self.stream
+    // }
 
     #[must_use]
     pub fn capabilities(&self) -> &Capabilities {
@@ -732,7 +731,7 @@ impl<'a> Player<'a> {
     }
 }
 
-impl std::fmt::Debug for Player<'_> {
+impl std::fmt::Debug for Player {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self.capabilities)
     }
@@ -747,11 +746,9 @@ pub async fn poll_player<'a>(stream: &mut SignalStream<'a>) -> anyhow::Result<Po
         // be empty
         let structure: zbus::zvariant::Structure = body.deserialize().unwrap();
 
-        let iface: zbus::zvariant::Str = structure.fields()[0].clone().try_into()?;
+        // let iface: zbus::zvariant::Str = structure.fields()[0].clone().try_into()?;
         let changed: HashMap<String, zbus::zvariant::OwnedValue> =
             structure.fields()[1].clone().try_into()?;
-
-        println!("iface {iface} changed {changed:?}]");
 
         if let Some(status) = changed.get("PlaybackStatus") {
             let val = &**status;
@@ -768,7 +765,6 @@ pub async fn poll_player<'a>(stream: &mut SignalStream<'a>) -> anyhow::Result<Po
             if let Value::Dict(dict) = val {
                 let map: HashMap<String, Value> = dict.try_clone()?.try_into()?;
                 let metadata: Metadata = map.try_into()?;
-                println!("{metadata:?}");
                 return Ok(Poll::Ready(PlayerUpdated::Metadata(Box::new(metadata))));
             }
         }
