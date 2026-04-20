@@ -1,18 +1,15 @@
 [package]
-name = "server"
+name = "player"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+tokio.workspace = true
 lib.workspace = true
-tokio = { workspace = true, features = ["macros", "net"] }
-futures-util.workspace = true
+clap.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true 
 tracing-appender.workspace = true 
 futures.workspace = true
 zbus.workspace = true
-prost = "0.14.3"
-
-[features]
-owner_changed = []
+async-trait = "0.1.89"

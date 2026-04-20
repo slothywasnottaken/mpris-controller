@@ -1,16 +1,16 @@
 use anyhow::{anyhow, bail};
-use futures::Stream;
+use futures::StreamExt;
 use tracing::instrument;
 use zbus::{
     proxy::SignalStream,
-    zvariant::{ObjectPath, Str, Value},
+    zvariant::{ObjectPath, OwnedValue, Str, Value},
     Connection, Message,
 };
 
 use std::{
     collections::HashMap,
-    pin::Pin,
     task::{Context, Poll},
+    time::Duration,
 };
 
 use crate::{DbusMethods, DBUS_PROPERTIES, MPRIS_PATH, MPRIS_PLAYER_PREFIX, WAKER};
@@ -27,6 +27,18 @@ pub enum PlaybackStatus {
     Stopped,
     Paused,
     Playing,
+}
+
+impl From<PlaybackStatus> for Value<'_> {
+    fn from(value: PlaybackStatus) -> Self {
+        let v = match value {
+            PlaybackStatus::Stopped => "Stopped",
+            PlaybackStatus::Paused => "Paused",
+            PlaybackStatus::Playing => "Playing",
+        };
+
+        Self::Str(Str::from(v))
+    }
 }
 
 impl<'a> TryFrom<&Str<'a>> for PlaybackStatus {
@@ -87,6 +99,88 @@ impl From<LoopStatus> for Value<'_> {
         };
 
         Value::Str(status.into())
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct MetadataBuilder {
+    art_url: Option<String>,
+    length: Option<u64>,
+    trackid: Option<String>,
+    album: Option<String>,
+    artists: Option<Vec<String>>,
+    title: Option<String>,
+    url: Option<String>,
+    track_number: Option<i32>,
+    disc_number: Option<i32>,
+    auto_rating: Option<f64>,
+    album_artists: Option<Vec<String>>,
+}
+
+impl MetadataBuilder {
+    pub fn art_url(mut self, art_url: String) -> Self {
+        self.art_url = Some(art_url);
+        self
+    }
+
+    pub fn length(mut self, millis: u64) -> Self {
+        self.length = Some(millis);
+        self
+    }
+
+    pub fn trackid(mut self, id: String) -> Self {
+        self.trackid = Some(id);
+        self
+    }
+
+    pub fn album(mut self, album: String) -> Self {
+        self.album = Some(album);
+        self
+    }
+    pub fn artists(mut self, artists: Vec<String>) -> Self {
+        self.artists = Some(artists);
+        self
+    }
+    pub fn title(mut self, title: String) -> Self {
+        self.title = Some(title);
+        self
+    }
+    pub fn url(mut self, url: String) -> Self {
+        self.url = Some(url);
+        self
+    }
+    pub fn track_number(mut self, num: i32) -> Self {
+        self.track_number = Some(num);
+        self
+    }
+    pub fn disc_number(mut self, num: i32) -> Self {
+        self.disc_number = Some(num);
+        self
+    }
+    pub fn auto_rating(mut self, rating: f64) -> Self {
+        self.auto_rating = Some(rating);
+        self
+    }
+    pub fn album_artists(mut self, album: Vec<String>) -> Self {
+        self.album_artists = Some(album);
+
+        self
+    }
+
+    pub fn finish(self) -> Metadata {
+        Metadata {
+            art_url: self.art_url,
+            length: self.length,
+            trackid: self.trackid,
+            album: self.album,
+            artists: self.artists,
+            title: self.title,
+            url: self.url,
+            track_number: self.track_number,
+            disc_number: self.disc_number,
+            auto_rating: self.auto_rating,
+            album_artists: self.album_artists,
+        }
     }
 }
 
@@ -388,6 +482,59 @@ impl<'a> TryFrom<HashMap<String, Value<'a>>> for Metadata {
     }
 }
 
+impl<'a> From<Metadata> for HashMap<String, Value<'a>> {
+    #[instrument]
+    fn from(value: Metadata) -> Self {
+        let mut map = HashMap::new();
+        map.insert(
+            "mpris:artUrl".to_string(),
+            Value::from(value.art_url.unwrap_or(String::default())),
+        );
+        map.insert(
+            "mpris:length".to_string(),
+            Value::U64(value.length.unwrap_or(0)),
+        );
+        map.insert(
+            "mpris:trackid".to_string(),
+            Value::from(value.trackid.unwrap_or(String::default())),
+        );
+        map.insert(
+            "xesam:album".to_string(),
+            Value::from(value.album.unwrap_or(String::default())),
+        );
+        map.insert(
+            "xesam:artist".to_string(),
+            Value::from(value.artists.unwrap_or(Vec::default())),
+        );
+        map.insert(
+            "xesam:title".to_string(),
+            Value::from(value.title.unwrap_or(String::default())),
+        );
+        map.insert(
+            "xesam:url".to_string(),
+            Value::from(value.url.unwrap_or(String::default())),
+        );
+        map.insert(
+            "xesam:albumArtist".to_string(),
+            Value::from(value.album_artists.unwrap_or(Vec::default())),
+        );
+        map.insert(
+            "xesam:trackNumber".to_string(),
+            Value::from(value.track_number.unwrap_or(0)),
+        );
+        map.insert(
+            "xesam:discNumber".to_string(),
+            Value::from(value.disc_number.unwrap_or(0)),
+        );
+        map.insert(
+            "xesam:autoRating".to_string(),
+            Value::from(value.auto_rating.unwrap_or(0.0)),
+        );
+
+        map
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 #[allow(dead_code)]
 pub struct Capabilities {
@@ -502,6 +649,59 @@ impl<'a> TryFrom<HashMap<&str, Value<'a>>> for Capabilities {
     }
 }
 
+impl From<Capabilities> for HashMap<String, OwnedValue> {
+    fn from(value: Capabilities) -> HashMap<String, OwnedValue> {
+        let mut map = HashMap::new();
+
+        map.insert(
+            "CanControl".to_string(),
+            OwnedValue::from(value.can_control),
+        );
+        map.insert("CanGoNext".to_string(), OwnedValue::from(value.can_control));
+        map.insert(
+            "CanGoPrevious".to_string(),
+            OwnedValue::from(value.can_control),
+        );
+        map.insert("CanPause".to_string(), OwnedValue::from(value.can_control));
+        map.insert("CanPlay".to_string(), OwnedValue::from(value.can_control));
+        map.insert("CanSeek".to_string(), OwnedValue::from(value.can_control));
+        map.insert("Position".to_string(), OwnedValue::from(value.position));
+        map.insert(
+            "Shuffle".to_string(),
+            OwnedValue::from(value.shuffle.unwrap_or(false)),
+        );
+        map.insert(
+            "MinimumRate".to_string(),
+            OwnedValue::from(value.min_rate.unwrap_or(0.0)),
+        );
+        map.insert(
+            "MaximumRate".to_string(),
+            OwnedValue::from(value.max_rate.unwrap_or(0.0)),
+        );
+        map.insert(
+            "LoopStatus".to_string(),
+            Value::from(value.loop_status.unwrap_or(LoopStatus::None))
+                .try_to_owned()
+                .unwrap(),
+        );
+        map.insert(
+            "PlaybackStatus".to_string(),
+            Value::from(value.playback_status).try_to_owned().unwrap(),
+        );
+        map.insert("Rate".to_string(), OwnedValue::from(value.rate));
+        map.insert(
+            "Volume".to_string(),
+            OwnedValue::from(value.volume.unwrap_or(0.0)),
+        );
+        map.insert(
+            "Metadata".to_string(),
+            OwnedValue::from(HashMap::from(value.metadata)),
+        );
+
+        map
+    }
+}
+
 #[derive(Debug)]
 pub enum PlayerUpdated {
     PlaybackStatus(PlaybackStatus),
@@ -517,9 +717,14 @@ pub enum MprisEvent {
 }
 
 pub struct Player {
-    pub capabilities: Capabilities,
-    // pub stream: SignalStream<'a>,
+    pub(crate) capabilities: Capabilities,
     name: String,
+}
+
+impl std::fmt::Debug for Player {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.capabilities)
+    }
 }
 
 impl Player {
@@ -538,30 +743,11 @@ impl Player {
         let body = properties.body();
         let properties: Capabilities = body.deserialize::<HashMap<&str, Value>>()?.try_into()?;
 
-        // let proxy = Proxy::new(
-        //     conn,
-        //     BusName::WellKnown(WellKnownName::from_str_unchecked(&name)),
-        //     MPRIS_PATH,
-        //     DBUS_PROPERTIES,
-        // )
-        // .await?;
-
-        // let stream = proxy.receive_signal(DbusSignals::PropertiesChanged).await?;
-
         Ok(Self {
             capabilities: properties,
-            // stream,
             name,
         })
     }
-
-    // pub fn stream_mut(&mut self) -> &mut SignalStream<'a> {
-    //     &mut self.stream
-    // }
-    //
-    // pub fn stream(&self) -> &SignalStream<'a> {
-    //     &self.stream
-    // }
 
     #[must_use]
     pub fn capabilities(&self) -> &Capabilities {
@@ -731,16 +917,11 @@ impl Player {
     }
 }
 
-impl std::fmt::Debug for Player {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.capabilities)
-    }
-}
-
-pub async fn poll_player<'a>(stream: &mut SignalStream<'a>) -> anyhow::Result<Poll<PlayerUpdated>> {
+#[instrument]
+pub fn poll_player<'a>(stream: &mut SignalStream<'a>) -> Poll<PlayerUpdated> {
     let waker = WAKER;
     let mut cx = Context::from_waker(&waker);
-    if let Poll::Ready(Some(msg)) = SignalStream::poll_next(Pin::new(stream), &mut cx) {
+    if let Poll::Ready(Some(msg)) = stream.poll_next_unpin(&mut cx) {
         let body = msg.body();
         // returns interface (str), changed (vec), invalidated (vec), invalidated seems to always
         // be empty
@@ -748,32 +929,33 @@ pub async fn poll_player<'a>(stream: &mut SignalStream<'a>) -> anyhow::Result<Po
 
         // let iface: zbus::zvariant::Str = structure.fields()[0].clone().try_into()?;
         let changed: HashMap<String, zbus::zvariant::OwnedValue> =
-            structure.fields()[1].clone().try_into()?;
+            structure.fields()[1].clone().try_into().unwrap();
 
         if let Some(status) = changed.get("PlaybackStatus") {
             let val = &**status;
 
             let val = match val {
                 Value::Str(s) => PlaybackStatus::try_from(s),
-                _ => bail!("incorrect type {val}"),
-            }?;
+                _ => panic!("incorrect type {val}"),
+            }
+            .unwrap();
 
-            return Ok(Poll::Ready(PlayerUpdated::PlaybackStatus(val)));
+            return Poll::Ready(PlayerUpdated::PlaybackStatus(val));
         }
         if let Some(status) = changed.get("Metadata") {
             let val = &**status;
             if let Value::Dict(dict) = val {
-                let map: HashMap<String, Value> = dict.try_clone()?.try_into()?;
-                let metadata: Metadata = map.try_into()?;
-                return Ok(Poll::Ready(PlayerUpdated::Metadata(Box::new(metadata))));
+                let map: HashMap<String, Value> = dict.try_clone().unwrap().try_into().unwrap();
+                let metadata: Metadata = map.try_into().unwrap();
+                return Poll::Ready(PlayerUpdated::Metadata(Box::new(metadata)));
             }
         }
         if let Some(status) = changed.get("CanGoPrevious") {
-            return Ok(Poll::Ready(PlayerUpdated::CanGoPrevious(bool::try_from(
-                status,
-            )?)));
+            return Poll::Ready(PlayerUpdated::CanGoPrevious(
+                bool::try_from(status).unwrap(),
+            ));
         }
-    };
+    }
 
-    Ok(Poll::Pending)
+    Poll::Pending
 }

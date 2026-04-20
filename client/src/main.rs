@@ -5,10 +5,11 @@ use std::{
 };
 
 use clap::Parser;
-use lib::{Client, MprisClient, Server, player::Metadata, server::Command};
+use lib::{Client, MprisClient, Server, server::Command};
 use prost::Message;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
+use zbus::Connection;
 
 #[derive(Debug, clap::Parser)]
 enum Cli {
@@ -23,6 +24,166 @@ enum Cli {
     Url,
     Metadata(MetadataCommand),
 }
+
+// #[derive(Debug)]
+// struct P {
+//     p: Capabilities,
+// }
+//
+// #[allow(unused)]
+// #[async_trait::async_trait]
+// impl Interface for P {
+//     #[doc = " Return the name of the interface. Ex: \"org.foo.MyInterface\""]
+//     fn name() -> InterfaceName<'static>
+//     where
+//         Self: Sized,
+//     {
+//         InterfaceName::from_static_str_unchecked("org.mpris.MediaPlayer2.Player")
+//     }
+//
+//     #[doc = " Get a property value. Returns `None` if the property doesn\'t exist."]
+//     #[doc = ""]
+//     #[doc = " Note: The header parameter will be None when the getter is not being called as part"]
+//     #[doc = " of D-Bus communication (for example, when it is called as part of initial object setup,"]
+//     #[doc = " before it is registered on the bus, or when we manually send out property changed"]
+//     #[doc = " notifications)."]
+//     #[must_use]
+//     #[allow(
+//         mismatched_lifetime_syntaxes,
+//         clippy::type_complexity,
+//         clippy::type_repetition_in_bounds
+//     )]
+//     async fn get(
+//         &self,
+//         property_name: &str,
+//         server: &ObjectServer,
+//         connection: &Connection,
+//         header: Option<&message::Header<'_>>,
+//         emitter: &SignalEmitter<'_>,
+//     ) -> Option<FdoResult<OwnedValue>>
+//     where
+//         'life0: 'async_trait,
+//         'life1: 'async_trait,
+//         'life2: 'async_trait,
+//         'life3: 'async_trait,
+//         'life4: 'async_trait,
+//         'life5: 'async_trait,
+//         'life6: 'async_trait,
+//         'life7: 'async_trait,
+//         Self: 'async_trait,
+//     {
+//         todo!()
+//     }
+//
+//     #[doc = " Return all the properties."]
+//     #[must_use]
+//     #[allow(
+//         mismatched_lifetime_syntaxes,
+//         clippy::type_complexity,
+//         clippy::type_repetition_in_bounds
+//     )]
+//     async fn get_all(
+//         &self,
+//         object_server: &ObjectServer,
+//         connection: &Connection,
+//         header: Option<&message::Header<'_>>,
+//         emitter: &SignalEmitter<'_>,
+//     ) -> fdo::Result<HashMap<String, OwnedValue>> {
+//         let map: HashMap<String, OwnedValue> = self.p.clone().into();
+//
+//         println!("get_all {map:#?}");
+//
+//         return Ok(map);
+//     }
+//
+//     #[doc = " Set a property value."]
+//     #[doc = ""]
+//     #[doc = " Returns `None` if the property doesn\'t exist."]
+//     #[doc = ""]
+//     #[doc = " This will only be invoked if `set` returned `RequiresMut`."]
+//     #[must_use]
+//     #[allow(
+//         mismatched_lifetime_syntaxes,
+//         clippy::type_complexity,
+//         clippy::type_repetition_in_bounds
+//     )]
+//     fn set_mut<
+//         'life0,
+//         'life1,
+//         'life2,
+//         'life3,
+//         'life4,
+//         'life5,
+//         'life6,
+//         'life7,
+//         'life8,
+//         'life9,
+//         'async_trait,
+//     >(
+//         &'life0 mut self,
+//         property_name: &'life1 str,
+//         value: &'life2 Value<'life3>,
+//         object_server: &'life4 ObjectServer,
+//         connection: &'life5 Connection,
+//         header: Option<&'life6 Header<'life7>>,
+//         emitter: &'life8 SignalEmitter<'life9>,
+//     ) -> ::core::pin::Pin<
+//         Box<
+//             dyn ::core::future::Future<Output = Option<fdo::Result<()>>>
+//                 + ::core::marker::Send
+//                 + 'async_trait,
+//         >,
+//     >
+//     where
+//         'life0: 'async_trait,
+//         'life1: 'async_trait,
+//         'life2: 'async_trait,
+//         'life3: 'async_trait,
+//         'life4: 'async_trait,
+//         'life5: 'async_trait,
+//         'life6: 'async_trait,
+//         'life7: 'async_trait,
+//         'life8: 'async_trait,
+//         'life9: 'async_trait,
+//         Self: 'async_trait,
+//     {
+//         todo!()
+//     }
+//
+//     #[doc = " Call a method."]
+//     #[doc = ""]
+//     #[doc = " Return [`DispatchResult::NotFound`] if the method doesn\'t exist, or"]
+//     #[doc = " [`DispatchResult::RequiresMut`] if `call_mut` should be used instead."]
+//     #[doc = ""]
+//     #[doc = " It is valid, though inefficient, for this to always return `RequiresMut`."]
+//     fn call<'call>(
+//         &'call self,
+//         server: &'call ObjectServer,
+//         connection: &'call Connection,
+//         msg: &'call zbus::Message,
+//         name: MemberName<'call>,
+//     ) -> DispatchResult<'call> {
+//         todo!()
+//     }
+//
+//     #[doc = " Call a `&mut self` method."]
+//     #[doc = ""]
+//     #[doc = " This will only be invoked if `call` returned `RequiresMut`."]
+//     fn call_mut<'call>(
+//         &'call mut self,
+//         server: &'call ObjectServer,
+//         connection: &'call Connection,
+//         msg: &'call zbus::Message,
+//         name: MemberName<'call>,
+//     ) -> DispatchResult<'call> {
+//         todo!()
+//     }
+//
+//     #[doc = " Write introspection XML to the writer, with the given indentation level."]
+//     fn introspect_to_writer(&self, writer: &mut dyn std::fmt::Write, level: usize) {
+//         todo!()
+//     }
+// }
 
 #[derive(Debug, clap::Parser)]
 struct MetadataCommand {
@@ -61,24 +222,6 @@ struct MetadataCommand {
     album_artists: bool,
 }
 
-impl Default for MetadataCommand {
-    fn default() -> Self {
-        Self {
-            art_url: true,
-            length: true,
-            trackid: true,
-            album: true,
-            artists: true,
-            title: true,
-            url: true,
-            track_number: true,
-            disc_number: true,
-            auto_rating: true,
-            album_artists: true,
-        }
-    }
-}
-
 fn send_command(command: Server, buf: &mut Vec<u8>, socket: &mut UnixStream) {
     command.encode(buf).unwrap();
 
@@ -87,34 +230,32 @@ fn send_command(command: Server, buf: &mut Vec<u8>, socket: &mut UnixStream) {
 
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse();
-    // std::panic::set_hook(Box::new(|panic_info| {
-    //     println!("panic occurred: {panic_info}");
-    // }));
-    //
-    let mut server = std::os::unix::net::UnixStream::connect("/tmp/mpris-controller.sock").unwrap();
-    // server.set_nonblocking(true).unwrap();
-    //
-    let mut bytes = vec![];
+    std::panic::set_hook(Box::new(|panic_info| {
+        println!("panic occurred: {panic_info}");
+    }));
 
-    // let user = std::env::home_dir().unwrap();
-    // let user = user.to_str().unwrap();
-    // let path = format!("{user}/.local/share/log");
-    // let file = std::fs::OpenOptions::new()
-    //     .write(true)
-    //     .create(true)
-    //     .truncate(false)
-    //     .open(&path)
-    //     .expect("truncating log file failed");
+    let user = std::env::home_dir().unwrap();
+    let user = user.to_str().unwrap();
+    let path = format!("{user}/.local/share/log");
+    let _file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .expect("truncating log file failed");
 
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new("client=trace"))
         .with_span_events(FmtSpan::FULL)
-        // .with_writer(file)
-        // .with_ansi(false)
         .init();
-    let mut client = MprisClient::new().await.unwrap();
-    client.get_all().await.unwrap();
+
+    let conn = Connection::session().await.unwrap();
+
+    let mut client = MprisClient::new().unwrap();
+    client.get_all(&conn).await.unwrap();
+
+    let mut server = std::os::unix::net::UnixStream::connect("/tmp/mpris-controller.sock").unwrap();
+    let mut bytes = vec![];
 
     let mut buff = [0; 512];
 
@@ -152,29 +293,25 @@ async fn main() {
         }
     }
 
+    let cli = Cli::parse();
+
     if let Some(player_name) = player_name {
+        info!(?player_name);
+        let playing = client.get(&player_name).unwrap();
         match cli {
             Cli::Prev => {
-                let playing = client.get(&player_name).unwrap();
-                let conn = zbus::Connection::session().await.unwrap();
                 playing.prev(&conn).await;
             }
             Cli::After => {
-                let playing = client.get(&player_name).unwrap();
-                let conn = zbus::Connection::session().await.unwrap();
                 playing.next(&conn).await;
             }
             Cli::Stop => {
-                let playing = client.get(&player_name).unwrap();
-                let conn = zbus::Connection::session().await.unwrap();
                 playing.stop(&conn).await;
             }
             Cli::TogglePause => {
                 println!("player name {player_name:?}");
-                let playing = client.get(&player_name).unwrap();
-                let conn = zbus::Connection::session().await.unwrap();
 
-                match playing.capabilities.playback_status {
+                match playing.capabilities().playback_status {
                     lib::player::PlaybackStatus::Stopped => playing.play(&conn).await,
                     lib::player::PlaybackStatus::Paused => playing.play(&conn).await,
                     lib::player::PlaybackStatus::Playing => {
@@ -183,29 +320,23 @@ async fn main() {
                 }
             }
             Cli::Pause => {
-                println!("player name {player_name:?}");
-                let playing = client.get(&player_name).unwrap();
-                let conn = zbus::Connection::session().await.unwrap();
                 playing.pause(&conn).await;
             }
             Cli::Play => {
-                println!("player name {player_name:?}");
-                let playing = client.get(&player_name).unwrap();
-                let conn = zbus::Connection::session().await.unwrap();
                 playing.play(&conn).await;
             }
             Cli::Players => {
                 for player in client.player_names() {
-                    print!("{} ", player.name())
+                    print!("{} ", player)
                 }
                 println!();
             }
             Cli::Playing => {
-                let playing = client.get(&player_name).unwrap();
-                let title = playing.capabilities.metadata.title().unwrap_or("");
-                let artists = playing.capabilities.metadata.artists();
+                let metadata = &playing.capabilities().metadata;
+                let title = metadata.title().unwrap_or("");
+                let artists = metadata.artists();
 
-                let url = playing.capabilities.metadata.url().unwrap_or("");
+                let url = metadata.url().unwrap_or("");
                 print!("{} - ", title);
                 if let Some(a) = artists {
                     for a in a {
@@ -215,13 +346,11 @@ async fn main() {
                 println!("{url}");
             }
             Cli::Url => {
-                let playing = client.get(&player_name).unwrap();
-                let url = playing.capabilities.metadata.url().unwrap_or("");
+                let url = playing.capabilities().metadata.url().unwrap_or("");
                 println!("{url}");
             }
             Cli::Metadata(data) => {
                 let mut fmt = String::new();
-                let playing = client.get(&player_name).unwrap();
                 let metadata = &playing.capabilities().metadata;
                 if data.art_url {
                     fmt.write_fmt(format_args!("{} ", metadata.url().unwrap_or("")))
@@ -247,71 +376,97 @@ async fn main() {
                             printable_len[2] = hours as u8;
 
                             if printable_len[2] < 10 {
-                                print!("0{}:", printable_len[2]);
+                                fmt.write_fmt(format_args!("0{}:", printable_len[2]))
+                                    .unwrap();
                             } else {
-                                print!("{}:", printable_len[2]);
+                                fmt.write_fmt(format_args!("{}:", printable_len[2]))
+                                    .unwrap();
                             }
 
                             if printable_len[1] < 10 {
-                                print!("0{}:", printable_len[1]);
+                                fmt.write_fmt(format_args!("0{}:", printable_len[1]))
+                                    .unwrap();
                             } else {
-                                print!("{}:", printable_len[1]);
+                                fmt.write_fmt(format_args!("{}:", printable_len[1]))
+                                    .unwrap();
                             }
 
                             if printable_len[0] < 10 {
-                                print!("0{} ", printable_len[0]);
+                                fmt.write_fmt(format_args!("0{}:", printable_len[0]))
+                                    .unwrap();
                             } else {
-                                print!("{} ", printable_len[0]);
+                                fmt.write_fmt(format_args!("{}:", printable_len[0]))
+                                    .unwrap();
                             }
                         }
                     }
                 }
 
                 if data.trackid {
-                    print!("{} ", metadata.track_id().unwrap_or(""));
+                    fmt.write_fmt(format_args!("{} ", metadata.track_id().unwrap_or("")))
+                        .unwrap();
                 }
                 if data.album {
-                    print!("{} ", metadata.album().unwrap_or(""));
+                    fmt.write_fmt(format_args!("{} ", metadata.album().unwrap_or("")))
+                        .unwrap();
                 }
                 if data.artists
                     && let Some(artists) = metadata.artists()
                 {
                     for (i, art) in artists.iter().enumerate() {
                         if i >= artists.len() {
-                            print!("{art} ")
+                            fmt.write_fmt(format_args!("{art} ")).unwrap();
                         } else {
-                            print!("{art}, ")
+                            fmt.write_fmt(format_args!("{art}, ")).unwrap();
                         }
                     }
                 }
                 if data.title {
-                    print!("{} ", metadata.title().unwrap_or(""));
+                    fmt.write_fmt(format_args!("{}, ", metadata.title().unwrap_or("")))
+                        .unwrap();
                 }
                 if data.url {
-                    print!("{} ", metadata.url().unwrap_or(""));
+                    fmt.write_fmt(format_args!("{}, ", metadata.url().unwrap_or("")))
+                        .unwrap();
                 }
                 if data.track_number {
-                    print!("{} ", metadata.track_number().unwrap_or(0));
+                    match metadata.track_number() {
+                        Some(n) => {
+                            fmt.write_fmt(format_args!("{}, ", n)).unwrap();
+                        }
+                        None => {
+                            fmt.write_fmt(format_args!("Track number unsupported, "))
+                                .unwrap();
+                        }
+                    }
                 }
                 if data.auto_rating {
-                    print!("{} ", metadata.auto_rating().unwrap_or(0.0));
+                    match metadata.auto_rating() {
+                        Some(n) => {
+                            fmt.write_fmt(format_args!("{}, ", n)).unwrap();
+                        }
+                        None => {
+                            fmt.write_fmt(format_args!("Auto rating unsupported, "))
+                                .unwrap();
+                        }
+                    }
                 }
                 if data.album_artists
                     && let Some(artists) = metadata.album_artists()
                 {
                     if artists.len() == 1 {
-                        print!("{} ", artists[0]);
+                        fmt.write_fmt(format_args!("{} ", artists[0])).unwrap();
                     } else {
                         for (i, art) in artists.iter().enumerate() {
                             if i >= artists.len() {
-                                print!("{art} ")
+                                fmt.write_fmt(format_args!("{} ", art)).unwrap();
                             } else {
-                                print!("{art}, ")
+                                fmt.write_fmt(format_args!("{}, ", art)).unwrap();
                             }
                         }
                     }
                 }
-                println!();
+                println!("{fmt}");
             }
         }
     }

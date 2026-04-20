@@ -1,10 +1,11 @@
 [workspace]
-members = ["client", "server", "lib"]
+members = ["client", "server", "lib", "player"]
 resolver = "3"
 
 [workspace.dependencies]
 client = { path = "./client" }
 server = { path = "./server" }
+player = { path = "./player" }
 lib = { path = "./lib" }
 anyhow = "1.0.100"
 clap = { version = "4.5.53", features = ["derive"] }

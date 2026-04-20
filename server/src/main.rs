@@ -4,9 +4,13 @@ use std::{
     time::Duration,
 };
 
-use lib::{Client, MprisClient, player::PlaybackStatus};
-use prost::Message;
+#[cfg(feature = "owner_changed")]
+use lib::init_owner_changed_signal;
+
+use lib::{Client, MprisClient, client::Message};
+use prost::Message as _;
 use tracing::{info, level_filters::LevelFilter};
+use zbus::Connection;
 
 #[tokio::main]
 async fn main() {
@@ -24,8 +28,12 @@ async fn main() {
     let mut bytes = [0; 512];
     let mut send = vec![];
 
-    let mut client = MprisClient::new().await.unwrap();
-    client.get_all().await.unwrap();
+    let mut client = MprisClient::new().unwrap();
+    let conn = Connection::session().await.unwrap();
+    client.get_all(&conn).await.unwrap();
+
+    #[cfg(feature = "owner_changed")]
+    init_owner_changed_signal().await;
 
     let mut player = None;
     let mut socket = None;
@@ -57,55 +65,33 @@ async fn main() {
                                     player = client.get_id(&name)
                                 }
                                 lib::server::Command::GetPlayer(_) => {
-                                    client.event().await;
-                                    println!("{}", player.is_some());
-                                    match player {
-                                        Some(p) => {
-                                            if let Some(curent) = client.currently_playing()
-                                                && let Some(p) = player
-                                            {
-                                                let real = client.get_from_id(p).unwrap();
-                                                if curent.name() != real.name() {
-                                                    player = client.get_id(curent.name());
-                                                }
-                                            }
-                                            let client_message = Client {
-                                                message: Some(lib::client::Message::FocusedPlayer(
-                                                    client
-                                                        .get_from_id(p)
-                                                        .unwrap()
-                                                        .name()
-                                                        .to_string(),
-                                                )),
-                                            };
+                                    client.event(&conn).await;
 
-                                            client_message.encode(&mut send).unwrap();
-
-                                            _ = sock.write(&send);
-                                            send.clear();
-                                        }
-
-                                        None => {
-                                            match client.currently_playing() {
-                                                Some(p) => {
-                                                    player = client.get_id(p.name());
-                                                }
-                                                None => {
-                                                    let client_message = Client {
-                                            message: Some(lib::client::Message::CouldNotFindPlayer(
-                                                true,
-                                            ))
-                                                };
-
-                                                    client_message.encode(&mut send).unwrap();
-
-                                                    info!("sent {:?}", send.len());
-                                                    _ = sock.write(&send);
-                                                    send.clear();
-                                                }
-                                            }
-                                        }
+                                    if player.is_none()
+                                        && let Some(p) = client.currently_playing()
+                                    {
+                                        player = Some(client.get_id(p.name()).unwrap())
                                     }
+
+                                    let msg = match player {
+                                        None => Client {
+                                            message: Some(Message::CouldNotFindPlayer(true)),
+                                        },
+                                        Some(p) => match client.get_from_id(p) {
+                                            None => Client {
+                                                message: Some(Message::CouldNotFindPlayer(true)),
+                                            },
+                                            Some(player) => Client {
+                                                message: Some(Message::FocusedPlayer(
+                                                    player.name().to_string(),
+                                                )),
+                                            },
+                                        },
+                                    };
+                                    msg.encode(&mut send).unwrap();
+
+                                    _ = sock.write(&send);
+                                    send.clear();
                                 }
                             }
                         }
